@@ -22,7 +22,6 @@ from typing import Callable
 try:
     import pystray
     from PIL import Image
-
     TRAY_AVAILABLE = True
 except ImportError:
     TRAY_AVAILABLE = False
@@ -31,7 +30,6 @@ _ROBOT_PATH = Path(__file__).parent.parent / "image" / "robot_token_monitor.png"
 
 
 # ── TrayManager ───────────────────────────────────────────────────────────────
-
 
 class TrayManager:
     """
@@ -43,21 +41,21 @@ class TrayManager:
 
     def __init__(
         self,
-        root: tk.Tk,
+        root:         tk.Tk,
         state,
-        runtime_cfg: dict,
-        on_open: Callable,
-        on_settings: Callable,
-        on_quit: Callable,
+        runtime_cfg:  dict,
+        on_open:      Callable,
+        on_settings:  Callable,
+        on_quit:      Callable,
     ):
-        self.root = root
-        self.state = state
-        self.runtime_cfg = runtime_cfg
-        self._on_open = on_open
+        self.root         = root
+        self.state        = state
+        self.runtime_cfg  = runtime_cfg
+        self._on_open     = on_open
         self._on_settings = on_settings
-        self._on_quit = on_quit
+        self._on_quit     = on_quit
         self._icon: "pystray.Icon | None" = None
-        self._robot_icon = None  # cargado en start()
+        self._robot_icon = None   # cargado en start()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -92,16 +90,16 @@ class TrayManager:
         """Actualiza el tooltip con el % actual. Llamar desde cualquier hilo."""
         if not TRAY_AVAILABLE or not self._icon:
             return
-        self._icon.title = f"Token Monitor — {int(pct * 100)}%"
+        self._icon.title = f"Token Monitor — {int(pct*100)}%"
 
     # ── pystray ───────────────────────────────────────────────────────────────
 
     def _create_icon(self):
         def sess_text(item):
-            snap = self.state.snapshot()
-            limit = self.runtime_cfg.get("session_limit", 0)
+            snap   = self.state.snapshot()
+            limit  = self.runtime_cfg.get("session_limit", 0)
             factor = self.runtime_cfg.get("calibration_factor", 1.0)
-            tok = snap.get("cl_5h_out", 0)
+            tok    = snap.get("cl_5h_out", 0)
             if limit > 0:
                 pct = min(tok / limit * factor * 100, 100)
                 return f"Claude: {pct:.0f}% sesion"
@@ -109,27 +107,26 @@ class TrayManager:
 
         def week_text(item):
             from .ui import _sess_reset_text
-
             txt = _sess_reset_text(self.runtime_cfg)
             return f"Semana: {txt}" if txt else "Semana: configurar reset"
 
         menu = pystray.Menu(
-            pystray.MenuItem("Token Monitor", None, enabled=False),
+            pystray.MenuItem("Token Monitor",   None,               enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Abrir monitor", self._open, default=True),
-            pystray.MenuItem("Configuracion", self._settings),
+            pystray.MenuItem("Abrir monitor",   self._open,         default=True),
+            pystray.MenuItem("Configuracion",   self._settings),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(sess_text, None, enabled=False),
-            pystray.MenuItem(week_text, None, enabled=False),
+            pystray.MenuItem(sess_text,         None,               enabled=False),
+            pystray.MenuItem(week_text,         None,               enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Cerrar", self._quit),
+            pystray.MenuItem("Cerrar",          self._quit),
         )
 
         return pystray.Icon(
-            name="token-monitor",
-            icon=self._robot_icon,  # pystray redimensiona automáticamente
-            title="Token Monitor",
-            menu=menu,
+            name  = "token-monitor",
+            icon  = self._robot_icon,   # pystray redimensiona automáticamente
+            title = "Token Monitor",
+            menu  = menu,
         )
 
     def _run(self) -> None:
