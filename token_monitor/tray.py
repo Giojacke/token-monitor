@@ -13,15 +13,11 @@ Comportamiento:
       rojo   > 80%
 """
 
-from __future__ import annotations
-
 import sys
 import threading
 import tkinter as tk
-from collections.abc import Callable
-from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Callable
 
 try:
     import pystray
@@ -29,8 +25,6 @@ try:
 
     TRAY_AVAILABLE = True
 except ImportError:
-    pystray = None  # type: ignore[assignment]
-    Image = None  # type: ignore[assignment]
     TRAY_AVAILABLE = False
 
 _ROBOT_PATH = Path(__file__).parent.parent / "image" / "robot_token_monitor.png"
@@ -42,10 +36,8 @@ _ROBOT_PATH = Path(__file__).parent.parent / "image" / "robot_token_monitor.png"
 class TrayManager:
     """
     Gestiona el icono en la bandeja del sistema.
-    En macOS AppKit exige crear el NSStatusItem desde el hilo principal,
-    así que usamos pystray.run_detached() antes de entrar al mainloop de Tk.
-    En el resto de plataformas se conserva el hilo secundario porque
-    pystray.Icon.run() es bloqueante.
+    En macOS se integra con el mainloop principal; en otros sistemas corre
+    en un hilo secundario (pystray.Icon.run() es bloqueante).
     Toda comunicación con Tk va por root.after() — es thread-safe.
     """
 
@@ -64,7 +56,7 @@ class TrayManager:
         self._on_open = on_open
         self._on_settings = on_settings
         self._on_quit = on_quit
-        self._icon: Any | None = None
+        self._icon: "pystray.Icon | None" = None
         self._robot_icon = None  # cargado en start()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -74,7 +66,6 @@ class TrayManager:
             print("[tray] pystray/pillow no instalados — tray desactivado")
             print("[tray]   pip install pystray pillow")
             return
-        assert Image is not None
         try:
             self._robot_icon = Image.open(str(_ROBOT_PATH))
         except Exception:
@@ -90,8 +81,10 @@ class TrayManager:
 
     def stop(self) -> None:
         if self._icon:
-            with suppress(Exception):
+            try:
                 self._icon.stop()
+            except Exception:
+                pass
 
     # ── actualizar color desde el tick de UI ─────────────────────────────────
 
@@ -103,9 +96,7 @@ class TrayManager:
 
     # ── pystray ───────────────────────────────────────────────────────────────
 
-    def _create_icon(self) -> Any:
-        assert pystray is not None
-
+    def _create_icon(self):
         def sess_text(item):
             snap = self.state.snapshot()
             limit = self.runtime_cfg.get("session_limit", 0)
@@ -142,14 +133,12 @@ class TrayManager:
         )
 
     def _run(self) -> None:
-        icon = self._create_icon()
-        self._icon = icon
-        icon.run()
+        self._icon = self._create_icon()
+        self._icon.run()
 
     def _run_detached(self) -> None:
-        icon = self._create_icon()
-        self._icon = icon
-        icon.run_detached()
+        self._icon = self._create_icon()
+        self._icon.run_detached()
 
     # ── callbacks (hilo pystray → Tk via after) ───────────────────────────────
 
