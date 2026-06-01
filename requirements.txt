@@ -1,0 +1,8 @@
+# Core — tkinter viene incluido con Python, no se lista aquí
+
+# System tray y íconos (opcional pero recomendado en Windows)
+pystray>=0.19.0
+pillow>=10.0.0
+
+# Procesamiento de imágenes con numpy (usado en generación de íconos)
+numpy>=1.24.0

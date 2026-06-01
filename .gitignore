@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.*
+
+# Config local del monitor (tiene rutas absolutas de tu máquina)
+config.json
+
+# Build
+dist/
+build/
+*.spec
+*.egg-info/
+
+# Archivos internos de Claude Code y agentes
+.claude/
+.atl/
+
+# IDEs
+.vscode/
+.cursor/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs locales
+*.log
+~/.token-monitor/
