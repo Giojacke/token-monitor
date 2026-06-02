@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .config import PROJECTS_DIR, CODEX_SESSIONS_DIR
+from .gemini_scanner import find_gemini_chats_dir
 
 CONFIG_PATH = Path.home() / ".config" / "token-monitor" / "config.json"
 CACHE_TTL_H = 24   # horas antes de repetir la detección
@@ -37,17 +38,23 @@ class Detection:
     codex_bin:        str   = ""
     codex_has_logs:   bool  = False
 
+    # Gemini
+    gemini_installed: bool  = False
+    gemini_bin:       str   = ""
+    gemini_has_logs:  bool  = False
+
     # Metadato
     detected_at: str = ""
 
     @property
     def any_installed(self) -> bool:
-        return self.claude_installed or self.codex_installed
+        return self.claude_installed or self.codex_installed or self.gemini_installed
 
     @property
     def tools(self) -> list[str]:
         return (["claude"] if self.claude_installed else []) + \
-               (["codex"]  if self.codex_installed  else [])
+               (["codex"]  if self.codex_installed  else []) + \
+               (["gemini"] if self.gemini_installed else [])
 
     @property
     def show_claude(self) -> bool:
@@ -56,6 +63,10 @@ class Detection:
     @property
     def show_codex(self) -> bool:
         return self.codex_installed
+
+    @property
+    def show_gemini(self) -> bool:
+        return self.gemini_installed
 
 
 # ── detección ─────────────────────────────────────────────────────────────────
@@ -82,20 +93,36 @@ def detect() -> Detection:
         found = next(CODEX_SESSIONS_DIR.rglob("rollout-*.jsonl"), None)
         d.codex_has_logs = found is not None
 
+    # ── Gemini CLI ──
+    d.gemini_bin       = shutil.which("gemini") or ""
+    d.gemini_installed = bool(d.gemini_bin)
+
+    chats_dir = find_gemini_chats_dir()
+    if chats_dir is not None:
+        d.gemini_has_logs = next(chats_dir.glob("session-*.jsonl"), None) is not None
+
     return d
 
 
 def detect_or_cached() -> Detection:
     """
-    Devuelve la detección cacheada si tiene menos de CACHE_TTL_H horas.
-    Si no, corre una detección fresh y la guarda.
+    Devuelve la detección cacheada si:
+      - tiene menos de CACHE_TTL_H horas, Y
+      - contiene todos los campos del dataclass Detection (sin campos faltantes).
+    Si falta algún campo (p.ej. al agregar soporte para un proveedor nuevo),
+    trata la caché como stale y re-detecta automáticamente.
     """
     cached = _load_raw()
     if cached:
         try:
-            ts   = datetime.fromisoformat(cached.get("detected_at", ""))
+            ts    = datetime.fromisoformat(cached.get("detected_at", ""))
             stale = datetime.now() - ts > timedelta(hours=CACHE_TTL_H)
-            if not stale:
+            missing = any(
+                f not in cached
+                for f in Detection.__dataclass_fields__
+                if f != "detected_at"
+            )
+            if not stale and not missing:
                 return Detection(**{k: cached[k] for k in Detection.__dataclass_fields__ if k in cached})
         except Exception:
             pass
@@ -147,6 +174,15 @@ def print_detection(d: Detection) -> None:
             lines.append("       logs: ninguno encontrado")
     else:
         lines.append("  [--] Codex CLI    -> no instalado")
+
+    if d.gemini_installed:
+        lines.append(f"  [OK] Gemini CLI   -> {d.gemini_bin}")
+        if d.gemini_has_logs:
+            lines.append("       logs: ~/.gemini/tmp/")
+        else:
+            lines.append("       logs: ninguno encontrado")
+    else:
+        lines.append("  [--] Gemini CLI   -> no instalado")
 
     if not d.any_installed:
         lines.append("  [!!] Ninguna herramienta detectada")

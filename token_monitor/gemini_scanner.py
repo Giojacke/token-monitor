@@ -1,13 +1,12 @@
 """
-Scanner de Codex CLI — lee ~/.codex/sessions/**/*.jsonl
+Scanner de Gemini CLI — lee ~/.gemini/tmp/<usuario>/chats/session-*.jsonl
 
-Mismo enfoque que TokenScanner (Claude):
-  - Filtra períodos por timestamp UTC dentro de cada archivo
-  - NO usa la estructura de directorios para filtrar fechas
-    (un session file puede empezar un día y tener eventos del siguiente)
+Estrategia de path:
+  1. Intenta ~/.gemini/tmp/<username>/chats/  (nombre del usuario del SO)
+  2. Fallback: busca cualquier subdirectorio de ~/.gemini/tmp/ que tenga chats/
 
-Sesión  → archivo rollout con mtime más reciente.
-Cache   → evita releer archivos sin cambios (mtime + size).
+El JSONL usa un patrón append-update: el mismo mensaje (mismo "id") aparece
+varias veces. Se deduplica por id para evitar doble conteo de tokens.
 """
 
 import threading
@@ -16,36 +15,56 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from .config import SCAN_INTERVAL
-from .parser import parse_codex_line, calc_codex_cost
+from .parser import parse_gemini_line, calc_gemini_cost
 from .state import TokenState, PERIODS
 
 
-def _codex_period_starts() -> dict[str, datetime]:
-    """Inicio UTC de cada período (igual que Claude scanner)."""
+def find_gemini_chats_dir() -> Path | None:
+    """
+    Encuentra ~/.gemini/tmp/<usuario>/chats/ de forma dinámica.
+
+    Prioriza Path.home().name como nombre del subdirectorio (funciona en
+    Windows y Linux/Mac). Si no existe, itera buscando cualquier subdir
+    con carpeta chats/ como fallback para entornos corporativos/Docker.
+    """
+    base = Path.home() / ".gemini" / "tmp"
+    if not base.exists():
+        return None
+
+    # Intento 1: subdirectorio con el nombre del usuario del SO
+    primary = base / Path.home().name / "chats"
+    if primary.exists():
+        return primary
+
+    # Fallback: busca cualquier subdirectorio que tenga chats/
+    for subdir in base.iterdir():
+        if subdir.is_dir():
+            chats = subdir / "chats"
+            if chats.exists():
+                return chats
+
+    return None
+
+
+def _period_starts() -> dict[str, datetime]:
     now   = datetime.now().astimezone()
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    week_start  = today - timedelta(days=today.weekday())
-    month_start = today.replace(day=1)
-    year_start  = today.replace(month=1, day=1)
-
     return {
         "5h":    (now - timedelta(hours=5)).astimezone(timezone.utc),
         "today": today.astimezone(timezone.utc),
-        "week":  week_start.astimezone(timezone.utc),
-        "month": month_start.astimezone(timezone.utc),
-        "year":  year_start.astimezone(timezone.utc),
+        "week":  (today - timedelta(days=today.weekday())).astimezone(timezone.utc),
+        "month": today.replace(day=1).astimezone(timezone.utc),
+        "year":  today.replace(month=1, day=1).astimezone(timezone.utc),
     }
 
 
-class CodexScanner:
+class GeminiScanner:
     """
-    Escanea ~/.codex/sessions/**/*.jsonl cada SCAN_INTERVAL segundos.
-    Filtra períodos por timestamp UTC del evento (no por carpeta del día).
+    Escanea el directorio de chats de Gemini CLI cada SCAN_INTERVAL segundos.
+    La ruta se resuelve dinámicamente en cada ciclo.
     """
 
-    def __init__(self, sessions_dir: Path, state: TokenState, stop_event: threading.Event):
-        self.dir    = sessions_dir
+    def __init__(self, state: TokenState, stop_event: threading.Event):
         self.state  = state
         self._stop  = stop_event
         self._cache: dict = {}
@@ -63,14 +82,17 @@ class CodexScanner:
             time.sleep(SCAN_INTERVAL)
 
     def _scan(self) -> None:
-        if not self.dir.exists():
+        chats_dir = find_gemini_chats_dir()
+        if chats_dir is None:
             return
 
-        all_files = list(self.dir.rglob("rollout-*.jsonl"))
+        all_files = list(chats_dir.glob("session-*.jsonl"))
+        if not all_files:
+            all_files = list(chats_dir.glob("*.jsonl"))
         if not all_files:
             return
 
-        starts  = _codex_period_starts()
+        starts  = _period_starts()
         current = max(all_files, key=lambda f: f.stat().st_mtime)
 
         totals: dict[str, dict] = {
@@ -91,19 +113,17 @@ class CodexScanner:
                 fd = self._read_file(f, starts)
                 self._cache[key] = {"mtime": stat.st_mtime, "size": stat.st_size, "data": fd}
 
-            # Sesión = archivo más reciente
             if f == current:
                 for k in ("in", "out", "cached", "req", "cost"):
                     totals["sess"][k] += fd["sess"][k]
                 log        = fd["log"]
                 last_model = fd.get("last_model", "")
 
-            # Todos los archivos contribuyen a los períodos de tiempo
             for p in ("5h", "today", "week", "month", "year"):
                 for k in ("in", "out", "cached", "req", "cost"):
                     totals[p][k] += fd[p][k]
 
-        self.state.update_codex(totals, log[-40:], last_model)
+        self.state.update_gemini(totals, log[-40:], last_model)
 
     def _read_file(self, path: Path, starts: dict[str, datetime]) -> dict:
         fd: dict = {
@@ -112,34 +132,37 @@ class CodexScanner:
         }
         fd["log"]        = []
         fd["last_model"] = ""
-        current_model    = "default"
+
+        seen_ids: set = set()   # deduplicación: mismo id aparece varias veces
 
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
-                    r = parse_codex_line(line)
+                    r = parse_gemini_line(line)
                     if not r:
                         continue
+                    ts, inp, out, cached, model, entry_id = r
 
-                    # turn_context → actualiza el modelo activo
-                    if isinstance(r, tuple) and len(r) == 2 and r[0] == "model":
-                        current_model    = r[1]
-                        fd["last_model"] = current_model
+                    # El JSONL hace append-updates: misma entrada se repite
+                    # con datos adicionales. Procesamos solo la primera aparición.
+                    if entry_id and entry_id in seen_ids:
                         continue
+                    if entry_id:
+                        seen_ids.add(entry_id)
 
-                    ts, inp, out, cached = r
-                    cost = calc_codex_cost(inp, out, cached, current_model)
+                    cost = calc_gemini_cost(inp, out, cached, model)
 
                     fd["sess"]["in"]     += inp
                     fd["sess"]["out"]    += out
                     fd["sess"]["cached"] += cached
                     fd["sess"]["req"]    += 1
                     fd["sess"]["cost"]   += cost
+                    fd["last_model"]      = model
 
                     if ts >= starts["today"]:   # solo entradas de hoy
                         fd["log"].append(
-                            f"[{ts.astimezone().strftime('%H:%M:%S')}] [cx]"
-                            f"  {current_model}  in={inp + cached:,}  out={out:,}"
+                            f"[{ts.astimezone().strftime('%H:%M:%S')}] [gm]"
+                            f"  {model}  in={inp + cached:,}  out={out:,}"
                         )
 
                     for period, start_utc in starts.items():

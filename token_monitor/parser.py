@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from .config import (
     CLAUDE_MODELS_PRICES,
     CODEX_MODELS_PRICES,
+    GEMINI_MODELS_PRICES,
 )
 
 
@@ -111,6 +112,63 @@ def parse_codex_line(line: str):
         ts = datetime.now(timezone.utc)
 
     return ts, inp, out, cached
+
+
+def parse_gemini_line(line: str):
+    """
+    Parsea una línea JSONL de Gemini CLI.
+
+    Formato real (~/.gemini/tmp/<user>/chats/session-*.jsonl):
+      {"id": "uuid", "type": "gemini", "model": "gemini-3-flash-preview",
+       "tokens": {"input": N, "output": N, "cached": N, "thoughts": N, ...},
+       "timestamp": "ISO8601"}
+
+    El JSONL hace append-updates: el mismo mensaje (mismo "id") aparece
+    varias veces. El scanner deduplica por id usando el valor retornado aquí.
+    thoughts se suma a output (razonamiento interno de Gemini).
+
+    Devuelve (ts_utc, inp, out, cached, model, entry_id) o None.
+    """
+    if not line.strip():
+        return None
+    try:
+        obj = json.loads(line.strip())
+    except Exception:
+        return None
+
+    if obj.get("type") != "gemini":
+        return None
+
+    tokens = obj.get("tokens") or {}
+    inp      = tokens.get("input")    or 0
+    out      = tokens.get("output")   or 0
+    cached   = tokens.get("cached")   or 0
+    thoughts = tokens.get("thoughts") or 0
+
+    if not (inp or out or cached or thoughts):
+        return None
+
+    model    = obj.get("model")    or "default"
+    entry_id = obj.get("id")       or ""
+    out     += thoughts   # thoughts cuentan como output
+
+    try:
+        ts = datetime.fromisoformat(obj["timestamp"].replace("Z", "+00:00"))
+    except Exception:
+        ts = datetime.now(timezone.utc)
+
+    return ts, inp, out, cached, model, entry_id
+
+
+def calc_gemini_cost(inp: int, out: int, cached: int,
+                     model: str = "default") -> float:
+    p = GEMINI_MODELS_PRICES.get(model) or GEMINI_MODELS_PRICES["default"]
+    M = 1_000_000
+    return (
+        inp    * p["in"]     / M +
+        cached * p["cached"] / M +
+        out    * p["out"]    / M
+    )
 
 
 def calc_codex_cost(inp: int, out: int, cached: int,

@@ -4,13 +4,14 @@ from datetime import datetime, timedelta
 
 from .config import (
     BG, BG2, BG3, BORDER,
-    CLAUDE_C, SESS_BAR, WEEK_BAR, CODEX_C, DIM, TEXT, WHITE,
+    CLAUDE_C, SESS_BAR, WEEK_BAR, CODEX_C, GEMINI_C, DIM, TEXT, WHITE,
     REFRESH_MS, LOG_LINES,
     WINDOW_W, WINDOW_H_EXPANDED, WINDOW_H_COLLAPSED,
     CLAUDE_PRO_WEEKLY_LIMIT, CLAUDE_SESSION_WINDOW_H,
 )
 from .state import TokenState
 from .settings_ui import SettingsWindow
+from .i18n import t
 
 
 # ── formateo de números ───────────────────────────────────────────────────────
@@ -41,8 +42,9 @@ def make_bar(canvas: tk.Canvas, w: int, h: int, pct: float, color: str) -> None:
 
 # ── constantes de columnas ────────────────────────────────────────────────────
 
-COL_PERIODS  = [("HOY", "today"), ("SEM", "week"), ("MES", "month"), ("AÑO", "year")]
-COL_W        = 7   # ancho en caracteres de cada columna de datos
+# (key_i18n, period_key) — el label se traduce con t(key_i18n) en build/apply_language
+COL_PERIODS  = [("today", "today"), ("week", "week"), ("month", "month"), ("year", "year")]
+COL_W        = 7
 
 
 def _weekly_reset_str() -> str:
@@ -97,8 +99,9 @@ class TokenMonitorApp:
         self._collapsed    = False
         self._dragging     = False
         self._drag_x = self._drag_y = 0
-        self._settings_win = None
-        self.tray_manager  = None   # asignado después por __main__
+        self._settings_win  = None
+        self.tray_manager   = None
+        self._translatable: list = []   # (widget, i18n_key) para _apply_language()
 
         # Config mutable — compartida con SettingsWindow
         self.runtime_cfg = runtime_cfg or {
@@ -106,9 +109,10 @@ class TokenMonitorApp:
             "daily_budget": daily_budget,
         }
 
-        # Qué bloques mostrar (defaults: ambos si no hay detección)
-        self._show_cl = (detection.show_claude if detection else True)
-        self._show_cx = (detection.show_codex  if detection else True)
+        # Qué bloques mostrar (default False para Gemini si no hay detección)
+        self._show_cl = (detection.show_claude  if detection else True)
+        self._show_cx = (detection.show_codex   if detection else True)
+        self._show_gm = (detection.show_gemini  if detection else False)
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -126,6 +130,7 @@ class TokenMonitorApp:
         self.f_hdr     = tkfont.Font(family="Courier New", size=13, weight="bold")
 
         self._build_ui()
+        self._apply_language()
         self._bind_drag()
         self._tick()
 
@@ -164,34 +169,49 @@ class TokenMonitorApp:
         self._scroll_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
         # ── Contenido ─────────────────────────────────────────────────────────
-        if not (self._show_cl or self._show_cx):
+        if not (self._show_cl or self._show_cx or self._show_gm):
             self._build_no_tools_msg(self._body)
         else:
+            # Frames por proveedor — se muestran/ocultan con _apply_visibility()
             if self._show_cl:
-                self._build_claude_bars(self._body)
+                self._claude_frame = tk.Frame(self._body, bg=BG)
+                self._build_claude_bars(self._claude_frame)
 
-            if self._show_cl and self._show_cx:
-                tk.Frame(self._body, bg=BORDER, height=1).pack(fill="x", pady=5)
+            self._sep_cl_cx = tk.Frame(self._body, bg=BORDER, height=1)
 
             if self._show_cx:
-                self._add_provider_block(self._body, "CODEX CLI", CODEX_C, "cx")
+                self._codex_frame = tk.Frame(self._body, bg=BG)
+                self._add_provider_block(self._codex_frame, "CODEX CLI", CODEX_C, "cx")
 
-            tk.Frame(self._body, bg=BORDER, height=1).pack(fill="x", pady=5)
+            self._sep_cx_gm = tk.Frame(self._body, bg=BORDER, height=1)
+
+            if self._show_gm:
+                self._gm_frame = tk.Frame(self._body, bg=BG)
+                self._add_provider_block(self._gm_frame, "GEMINI CLI", GEMINI_C, "gm")
+
+            # Stats y log siempre visibles — anclan el orden de pack con before=
+            self._sep_stats = tk.Frame(self._body, bg=BORDER, height=1)
+            self._sep_stats.pack(fill="x", pady=5)
             self._build_stats(self._body)
             tk.Frame(self._body, bg=BORDER, height=1).pack(fill="x", pady=5)
             self._build_log(self._body)
+
+            # Aplica visibilidad inicial según preferencias guardadas
+            self._apply_visibility()
 
         # ── Footer fijo (fuera del scroll) ────────────────────────────────────
         self._footer = tk.Frame(self.root, bg="#0a0a0a", height=22)
         self._footer.pack(fill="x")
         self._footer.pack_propagate(False)
-        self.lbl_status = tk.Label(self._footer, text="scanning...",
+        self.lbl_status = tk.Label(self._footer, text=t("scanning"),
                                    bg="#0a0a0a", fg=DIM, font=self.f_mono_sm)
         self.lbl_status.pack(side="left", padx=10)
-        tk.Button(self._footer, text="reset", bg="#0a0a0a", fg=DIM, bd=0,
-                  font=self.f_mono_sm, activebackground="#0a0a0a",
-                  activeforeground=TEXT,
-                  command=lambda: self.state.reset()).pack(side="right", padx=10)
+        self._btn_reset = tk.Button(
+            self._footer, text=t("reset"), bg="#0a0a0a", fg=DIM, bd=0,
+            font=self.f_mono_sm, activebackground="#0a0a0a", activeforeground=TEXT,
+            command=lambda: self.state.reset())
+        self._btn_reset.pack(side="right", padx=10)
+        self._translatable.append((self._btn_reset, "reset"))
 
     def _build_header(self) -> None:
         hdr = tk.Frame(self.root, bg="#111", height=WINDOW_H_COLLAPSED)
@@ -275,8 +295,9 @@ class TokenMonitorApp:
 
         top_s = tk.Frame(sess_f, bg=BG)
         top_s.pack(fill="x")
-        tk.Label(top_s, text="Sesion actual", bg=BG, fg=TEXT,
-                 font=self.f_mono_sm).pack(side="left")
+        lbl_s = tk.Label(top_s, text=t("session"), bg=BG, fg=TEXT, font=self.f_mono_sm)
+        lbl_s.pack(side="left")
+        self._translatable.append((lbl_s, "session"))
         self.lbl_sess_pct   = tk.Label(top_s, text="0%", bg=BG, fg=WHITE,
                                         font=self.f_mono_sm)
         self.lbl_sess_reset = tk.Label(top_s, text="", bg=BG, fg=DIM,
@@ -303,8 +324,9 @@ class TokenMonitorApp:
 
         top_w = tk.Frame(week_f, bg=BG)
         top_w.pack(fill="x")
-        tk.Label(top_w, text="Semanal — todos los modelos", bg=BG, fg=TEXT,
-                 font=self.f_mono_sm).pack(side="left")
+        lbl_w = tk.Label(top_w, text=t("weekly"), bg=BG, fg=TEXT, font=self.f_mono_sm)
+        lbl_w.pack(side="left")
+        self._translatable.append((lbl_w, "weekly"))
         self.lbl_cl_week_pct   = tk.Label(top_w, text="0%", bg=BG, fg=WHITE,
                                            font=self.f_mono_sm)
         self.lbl_cl_week_reset = tk.Label(top_w, text="", bg=BG, fg=DIM,
@@ -331,11 +353,13 @@ class TokenMonitorApp:
             tk.Label(col0, text=txt, bg=BG, fg=DIM,
                      font=self.f_mono_sm, width=4, anchor="w").pack()
 
-        for label, period in COL_PERIODS:
+        for key, period in COL_PERIODS:
             col = tk.Frame(tbl, bg=BG)
             col.pack(side="left", expand=True, fill="x")
-            tk.Label(col, text=label, bg=BG, fg=DIM,
-                     font=self.f_mono_sm, width=COL_W, anchor="e").pack()
+            hdr = tk.Label(col, text=t(key), bg=BG, fg=DIM,
+                           font=self.f_mono_sm, width=COL_W, anchor="e")
+            hdr.pack()
+            self._translatable.append((hdr, key))
             lbl_tok  = tk.Label(col, text="0",  bg=BG, fg=CLAUDE_C,
                                 font=self.f_mono_sm, width=COL_W, anchor="e")
             lbl_cost = tk.Label(col, text="$0", bg=BG, fg=DIM,
@@ -379,12 +403,13 @@ class TokenMonitorApp:
                  width=4, anchor="w").pack()
 
         # Columnas de períodos
-        for label, period in COL_PERIODS:
+        for key, period in COL_PERIODS:
             col = tk.Frame(table, bg=BG)
             col.pack(side="left", expand=True, fill="x")
-
-            tk.Label(col, text=label, bg=BG, fg=DIM,
-                     font=self.f_mono_sm, width=COL_W, anchor="e").pack()
+            hdr = tk.Label(col, text=t(key), bg=BG, fg=DIM,
+                           font=self.f_mono_sm, width=COL_W, anchor="e")
+            hdr.pack()
+            self._translatable.append((hdr, key))
 
             lbl_tok  = tk.Label(col, text="0", bg=BG, fg=color,
                                 font=self.f_mono_sm, width=COL_W, anchor="e")
@@ -403,10 +428,10 @@ class TokenMonitorApp:
     def _build_stats(self, parent: tk.Frame) -> None:
         sf = tk.Frame(parent, bg=BG)
         sf.pack(fill="x", pady=2)
-        self.lbl_total_cost = self._stat_card(sf, "hoy total",  "$0.00",    WHITE)
-        self.lbl_week_cost  = self._stat_card(sf, "semana",     "$0.00",    TEXT)
-        self.lbl_month_cost = self._stat_card(sf, "mes",        "$0.00",    TEXT)
-        self.lbl_year_cost  = self._stat_card(sf, "año",        "$0.00",    DIM)
+        self.lbl_total_cost = self._stat_card(sf, "total_today", "$0.00", WHITE)
+        self.lbl_week_cost  = self._stat_card(sf, "total_week",  "$0.00", TEXT)
+        self.lbl_month_cost = self._stat_card(sf, "total_month", "$0.00", TEXT)
+        self.lbl_year_cost  = self._stat_card(sf, "total_year",  "$0.00", DIM)
 
     def _build_no_tools_msg(self, parent: tk.Frame) -> None:
         f = tk.Frame(parent, bg=BG)
@@ -417,8 +442,9 @@ class TokenMonitorApp:
                  bg=BG, fg=DIM, font=self.f_mono_sm).pack(pady=(4, 0))
 
     def _build_log(self, parent: tk.Frame) -> None:
-        tk.Label(parent, text="ACTIVITY LOG", bg=BG, fg=DIM,
-                 font=self.f_mono_sm).pack(anchor="w")
+        lbl = tk.Label(parent, text=t("activity_log"), bg=BG, fg=DIM, font=self.f_mono_sm)
+        lbl.pack(anchor="w")
+        self._translatable.append((lbl, "activity_log"))
         lf = tk.Frame(parent, bg=BG2, highlightthickness=1, highlightbackground=BORDER)
         lf.pack(fill="both", expand=True, pady=(2, 2))
         self.log_text = tk.Text(
@@ -465,6 +491,38 @@ class TokenMonitorApp:
         if self.tray_manager:
             self.tray_manager.stop()
         self.root.destroy()
+
+    # ── visibilidad de proveedores ────────────────────────────────────────────
+
+    def _apply_visibility(self) -> None:
+        """Muestra u oculta bloques de proveedor según runtime_cfg."""
+        if not hasattr(self, "_sep_stats"):
+            return
+        show_cl = self._show_cl and self.runtime_cfg.get("show_claude", True)
+        show_cx = self._show_cx and self.runtime_cfg.get("show_codex",  True)
+        show_gm = self._show_gm and self.runtime_cfg.get("show_gemini", True)
+
+        # Reset: quita todos del layout
+        for attr in ("_claude_frame", "_sep_cl_cx", "_codex_frame",
+                     "_sep_cx_gm", "_gm_frame"):
+            if hasattr(self, attr):
+                getattr(self, attr).pack_forget()
+
+        # Re-pack en orden correcto justo antes del separador de stats
+        if show_cl and hasattr(self, "_claude_frame"):
+            self._claude_frame.pack(fill="x", pady=2, before=self._sep_stats)
+
+        if show_cl and (show_cx or show_gm) and hasattr(self, "_sep_cl_cx"):
+            self._sep_cl_cx.pack(fill="x", pady=5, before=self._sep_stats)
+
+        if show_cx and hasattr(self, "_codex_frame"):
+            self._codex_frame.pack(fill="x", pady=2, before=self._sep_stats)
+
+        if show_cx and show_gm and hasattr(self, "_sep_cx_gm"):
+            self._sep_cx_gm.pack(fill="x", pady=5, before=self._sep_stats)
+
+        if show_gm and hasattr(self, "_gm_frame"):
+            self._gm_frame.pack(fill="x", pady=2, before=self._sep_stats)
 
     # ── scroll helpers ────────────────────────────────────────────────────────
 
@@ -537,9 +595,21 @@ class TokenMonitorApp:
             on_save=self._apply_settings,
         )
 
+    def _apply_language(self) -> None:
+        """Actualiza todos los widgets registrados en _translatable al idioma activo."""
+        for widget, key in self._translatable:
+            try:
+                widget.config(text=t(key))
+            except Exception:
+                pass
+        if hasattr(self, "lbl_status"):
+            self.lbl_status.config(text=t("scanning"))
+
     def _apply_settings(self, cfg: dict) -> None:
         """Callback cuando SettingsWindow guarda — aplica de inmediato."""
         self.runtime_cfg = cfg
+        self._apply_visibility()
+        self._apply_language()
 
     # ── tick de actualización ─────────────────────────────────────────────────
 
@@ -555,7 +625,8 @@ class TokenMonitorApp:
             if self._show_cl and hasattr(self, "lbl_claude_title"):
                 model = snap.get("cl_last_model", "")
                 short = model.replace("claude-", "") if model and model != "default" else ""
-                title = f"◆ CLAUDE CODE  — {short}  [Plan Pro]" if short else "◆ CLAUDE CODE  — Plan Pro"
+                pp    = t("plan_pro")
+                title = f"◆ CLAUDE CODE  — {short}  [{pp}]" if short else f"◆ CLAUDE CODE  — [{pp}]"
                 self.lbl_claude_title.config(text=title)
 
             # ── Claude: barra de sesión (5h) ──────────────────────────────────
@@ -567,7 +638,7 @@ class TokenMonitorApp:
                 w = self.cv_sess.winfo_width() or (WINDOW_W - 24)
                 make_bar(self.cv_sess, w, 10, sess_pct, SESS_BAR)
                 self.lbl_sess_pct.config(text=f"{sess_pct*100:.1f}%")
-                self.lbl_sess_cost.config(text=f"equiv. API: {fmt_cost(cost_5h)}")
+                self.lbl_sess_cost.config(text=f"{t('equiv_api')} {fmt_cost(cost_5h)}")
 
                 # Reset timer — countdown real con manejo de múltiples ciclos
                 reset_txt = _sess_reset_text(self.runtime_cfg)
@@ -575,7 +646,7 @@ class TokenMonitorApp:
 
                 # Hint de calibración — desaparece cuando ya está calibrado
                 if session_limit == 0:
-                    self.lbl_sess_hint.config(text="calibrar en ⚙")
+                    self.lbl_sess_hint.config(text=t("calibrate_hint"))
                 else:
                     self.lbl_sess_hint.config(text="")
 
@@ -592,7 +663,7 @@ class TokenMonitorApp:
                 w = self.cv_cl_week.winfo_width() or (WINDOW_W - 24)
                 make_bar(self.cv_cl_week, w, 10, week_pct, WEEK_BAR)
                 self.lbl_cl_week_pct.config(text=f"{week_pct*100:.1f}%")
-                self.lbl_cl_week_cost.config(text=f"equiv. API: {fmt_cost(cost_week)}")
+                self.lbl_cl_week_cost.config(text=f"{t('equiv_api')} {fmt_cost(cost_week)}")
 
                 # Reset semanal — usa el string guardado en config o el calculado
                 week_reset = self.runtime_cfg.get("weekly_reset_str", "")
@@ -600,7 +671,7 @@ class TokenMonitorApp:
                     week_reset = _weekly_reset_str()
                     week_reset = week_reset.replace("reset en ", "")  # "Xh Ym"
                     week_reset = f"en {week_reset}"
-                self.lbl_cl_week_reset.config(text=f"Se restablece {week_reset}")
+                self.lbl_cl_week_reset.config(text=f"{t('resets_on')} {week_reset}")
 
             # ── Claude: tabla HOY / SEM / MES / AÑO ─────────────────────────
             if self._show_cl:
@@ -614,9 +685,9 @@ class TokenMonitorApp:
             # ── Codex: título con modelo detectado ────────────────────────────
             if self._show_cx and hasattr(self, "lbl_cx_title"):
                 cx_model = snap.get("cx_last_model", "")
-                cx_short = cx_model if cx_model else "desconocido"
+                cx_short = cx_model if cx_model else t("unknown")
                 self.lbl_cx_title.config(
-                    text=f"◆ CODEX CLI  — {cx_short}  [ChatGPT Plus]")
+                    text=f"◆ CODEX CLI  — {cx_short}  [{t('chatgpt_plus')}]")
 
             # ── Codex provider block ──────────────────────────────────────────
             if self._show_cx and hasattr(self, "cv_cx"):
@@ -631,6 +702,28 @@ class TokenMonitorApp:
                         getattr(self, f"lbl_cx_{period}_tok").config(text=fmt_tok(tok))
                         getattr(self, f"lbl_cx_{period}_cost").config(text=fmt_cost(cost))
 
+            # ── Gemini: título con modelo detectado ───────────────────────────
+            if self._show_gm and hasattr(self, "lbl_gm_title"):
+                gm_model = snap.get("gm_last_model", "")
+                gm_short  = gm_model if gm_model else t("unknown")
+                self.lbl_gm_title.config(
+                    text=f"◆ GEMINI CLI  — {gm_short}  [{t('google_ai')}]")
+
+            # ── Gemini provider block — barra de actividad logarítmica ───────
+            # 0 tok → 0%  |  100K → 25%  |  500K → 100%  (log10 scale)
+            if self._show_gm and hasattr(self, "cv_gm"):
+                import math
+                tok_gm_sess = snap.get("gm_sess_tok", 0)
+                pct = min(math.log10(1 + tok_gm_sess / 100_000) / math.log10(6), 1.0)
+                w   = self.cv_gm.winfo_width() or (WINDOW_W - 24)
+                make_bar(self.cv_gm, w, 8, pct, GEMINI_C)
+                for _, period in COL_PERIODS:
+                    tok  = snap.get(f"gm_{period}_tok", 0)
+                    cost = snap.get(f"gm_{period}_cost", 0)
+                    if hasattr(self, f"lbl_gm_{period}_tok"):
+                        getattr(self, f"lbl_gm_{period}_tok").config(text=fmt_tok(tok))
+                        getattr(self, f"lbl_gm_{period}_cost").config(text=fmt_cost(cost))
+
             # ── stats totales ─────────────────────────────────────────────────
             if hasattr(self, "lbl_total_cost"):
                 self.lbl_total_cost.config(text=fmt_cost(snap.get("total_today_cost", 0)))
@@ -643,10 +736,16 @@ class TokenMonitorApp:
                 self.log_text.config(state="normal")
                 self.log_text.delete("1.0", "end")
                 for line in snap["log"][-LOG_LINES:]:
-                    tag = "cx" if "[cx]" in line else "cl"
+                    if "[cx]" in line:
+                        tag = "cx"
+                    elif "[gm]" in line:
+                        tag = "gm"
+                    else:
+                        tag = "cl"
                     self.log_text.insert("end", line + "\n", tag)
                 self.log_text.tag_config("cl", foreground=CLAUDE_C)
                 self.log_text.tag_config("cx", foreground=CODEX_C)
+                self.log_text.tag_config("gm", foreground=GEMINI_C)
                 self.log_text.config(state="disabled")
 
         self.root.after(REFRESH_MS, self._tick)

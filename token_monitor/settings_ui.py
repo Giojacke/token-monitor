@@ -1,15 +1,6 @@
 """
 Ventana de configuración — se abre con ⚙ en el header.
-
-Sección 1 — Calibrar desde la web:
-  Ingresás los % que muestra claude.ai/settings/limits
-  → el monitor back-calcula los límites reales de tu plan
-  → de ahí en adelante trackea acumulando sobre esa base
-
-Sección 2 — Ajustes generales:
-  Límite semanal, presupuesto diario
-
-Mismos colores y fuentes que el monitor principal.
+Incluye scrollbar autohide y selector de idioma.
 """
 
 import json
@@ -22,19 +13,14 @@ from .config import (
     CLAUDE_PRO_WEEKLY_LIMIT,
 )
 from .detector import CONFIG_PATH
+from .i18n import t, set_lang, get_lang
 
 
 class SettingsWindow:
     W = 340
-    H = 540
+    H = 520   # altura visible; scrollbar maneja el overflow
 
     def __init__(self, parent: tk.Tk, runtime_cfg: dict, state, on_save):
-        """
-        parent      — ventana principal
-        runtime_cfg — dict mutable con weekly_limit, session_limit, daily_budget
-        state       — TokenState para leer tokens actuales en la calibración
-        on_save     — callback(runtime_cfg) al guardar
-        """
         self._parent     = parent
         self.runtime_cfg = runtime_cfg
         self.state       = state
@@ -61,21 +47,87 @@ class SettingsWindow:
     # ── construcción ─────────────────────────────────────────────────────────
 
     def _build(self, f_sm, f_md, f_hd) -> None:
-        # Header
+        # ── Header fijo (fuera del scroll) ────────────────────────────────────
         hdr = tk.Frame(self.win, bg="#111", height=28)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
-        tk.Label(hdr, text="CONFIGURACION", bg="#111", fg=CLAUDE_C,
+        tk.Label(hdr, text=t("config_title"), bg="#111", fg=CLAUDE_C,
                  font=f_hd).pack(side="left", padx=10)
         tk.Button(hdr, text="X", bg="#111", fg=DIM, bd=0, padx=6,
                   font=f_sm, activebackground="#111", activeforeground="white",
                   command=self.win.destroy).pack(side="right")
 
-        body = tk.Frame(self.win, bg=BG, padx=14, pady=10)
-        body.pack(fill="both", expand=True)
+        # ── Área scrollable ────────────────────────────────────────────────────
+        outer = tk.Frame(self.win, bg=BG)
+        outer.pack(fill="both", expand=True)
+        outer.grid_rowconfigure(0, weight=1)
+        outer.grid_columnconfigure(0, weight=1)
+
+        self._canvas = tk.Canvas(outer, bg=BG, bd=0, highlightthickness=0,
+                                  yscrollcommand=self._on_scroll)
+        self._canvas.grid(row=0, column=0, sticky="nsew")
+
+        self._scrollbar = tk.Scrollbar(
+            outer, orient="vertical", width=8,
+            bg="#333333", troughcolor="#1c1c1c",
+            activebackground="#555555", relief="flat",
+            command=self._canvas.yview,
+        )
+        outer.grid_columnconfigure(1, weight=0)
+
+        body = tk.Frame(self._canvas, bg=BG, padx=14, pady=10)
+        self._win_id = self._canvas.create_window((0, 0), window=body, anchor="nw")
+
+        self._canvas.bind("<Configure>",
+                           lambda e: self._canvas.itemconfig(self._win_id, width=e.width))
+        body.bind("<Configure>",
+                   lambda e: self._canvas.configure(scrollregion=self._canvas.bbox("all")))
+        self.win.bind("<MouseWheel>",
+                       lambda e: self._canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+        # ── Status fijo (fuera del scroll, en el fondo) ───────────────────────
+        self.lbl_status = tk.Label(self.win, text="", bg=BG, fg=DIM, font=f_sm)
+        self.lbl_status.pack(anchor="w", padx=14, pady=(2, 4))
+
+        # ── Sección 0: Proveedores visibles ───────────────────────────────────
+        tk.Label(body, text=t("providers"),
+                 bg=BG, fg=DIM, font=f_hd).pack(anchor="w")
+        tk.Label(body, text=t("providers_hint"),
+                 bg=BG, fg=DIM, font=f_sm, justify="left").pack(anchor="w", pady=(2, 4))
+
+        self.var_show_claude = tk.BooleanVar(value=self.runtime_cfg.get("show_claude", True))
+        self.var_show_codex  = tk.BooleanVar(value=self.runtime_cfg.get("show_codex",  True))
+        self.var_show_gemini = tk.BooleanVar(value=self.runtime_cfg.get("show_gemini", True))
+
+        for var, key in [(self.var_show_claude, "claude_code"),
+                         (self.var_show_codex,  "codex_cli"),
+                         (self.var_show_gemini, "gemini_cli")]:
+            tk.Checkbutton(body, text=t(key), variable=var,
+                           bg=BG, fg=TEXT, selectcolor=BG3, activebackground=BG,
+                           font=f_sm, command=self._save_providers).pack(anchor="w")
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(10, 6))
+
+        # ── Sección 0b: Idioma ────────────────────────────────────────────────
+        tk.Label(body, text=t("language"),
+                 bg=BG, fg=DIM, font=f_hd).pack(anchor="w")
+
+        self.var_lang = tk.StringVar(value=get_lang())
+
+        lang_f = tk.Frame(body, bg=BG)
+        lang_f.pack(anchor="w", pady=(4, 2))
+        for lang_code, lang_label in [("es", "Español"), ("en", "English")]:
+            tk.Radiobutton(
+                lang_f, text=lang_label,
+                variable=self.var_lang, value=lang_code,
+                bg=BG, fg=TEXT, selectcolor=BG3, activebackground=BG,
+                font=f_sm, command=self._save_language,
+            ).pack(side="left", padx=(0, 14))
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 4))
 
         # ── Sección 1: Calibrar desde la web ──────────────────────────────────
-        tk.Label(body, text="CALIBRAR DESDE claude.ai/settings/limits",
+        tk.Label(body, text=t("calibrate"),
                  bg=BG, fg=CLAUDE_C, font=f_hd).pack(anchor="w")
         tk.Label(body,
                  text="Ingresa los valores actuales que muestra la web.\n"
@@ -86,39 +138,35 @@ class SettingsWindow:
         cal.pack(fill="x")
         cal.columnconfigure(1, weight=1)
 
-        # Sesión actual %
         tk.Label(cal, text="Sesion actual  (%)", bg=BG, fg=SESS_BAR,
                  font=f_sm, width=22, anchor="w").grid(row=0, column=0, sticky="w", pady=2)
         self.var_sess_pct = tk.StringVar(value="84")
-        self._entry(cal, self.var_sess_pct, f_md, SESS_BAR).grid(row=0, column=1, sticky="ew", padx=(8,0))
+        self._entry(cal, self.var_sess_pct, f_md, SESS_BAR).grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-        # Sesión reset en (minutos)
         tk.Label(cal, text="Reset sesion en (min)", bg=BG, fg=DIM,
                  font=f_sm, width=22, anchor="w").grid(row=1, column=0, sticky="w", pady=2)
         self.var_sess_reset_min = tk.StringVar(value="74")
-        self._entry(cal, self.var_sess_reset_min, f_md, DIM).grid(row=1, column=1, sticky="ew", padx=(8,0))
+        self._entry(cal, self.var_sess_reset_min, f_md, DIM).grid(row=1, column=1, sticky="ew", padx=(8, 0))
 
-        # Semanal %
         tk.Label(cal, text="Semanal        (%)", bg=BG, fg=WEEK_BAR,
                  font=f_sm, width=22, anchor="w").grid(row=2, column=0, sticky="w", pady=2)
         self.var_week_pct = tk.StringVar(value="12")
-        self._entry(cal, self.var_week_pct, f_md, WEEK_BAR).grid(row=2, column=1, sticky="ew", padx=(8,0))
+        self._entry(cal, self.var_week_pct, f_md, WEEK_BAR).grid(row=2, column=1, sticky="ew", padx=(8, 0))
 
-        # Reset semanal (texto libre)
         tk.Label(cal, text="Reset semanal (ej. mar 15:00)", bg=BG, fg=DIM,
                  font=f_sm, width=22, anchor="w").grid(row=3, column=0, sticky="w", pady=2)
         saved_reset = self.runtime_cfg.get("weekly_reset_str", "mar 15:00")
         self.var_week_reset = tk.StringVar(value=saved_reset)
-        self._entry(cal, self.var_week_reset, f_md, DIM).grid(row=3, column=1, sticky="ew", padx=(8,0))
+        self._entry(cal, self.var_week_reset, f_md, DIM).grid(row=3, column=1, sticky="ew", padx=(8, 0))
 
-        tk.Button(body, text="Calibrar limites", bg=SESS_BAR, fg="#000", bd=0,
+        tk.Button(body, text=t("calibrate_btn"), bg=SESS_BAR, fg="#000", bd=0,
                   font=f_md, padx=8, pady=3,
                   activebackground="#c07800", activeforeground="#000",
                   command=self._calibrate).pack(fill="x", pady=(10, 2))
 
         # ── Sección 1b: Recalibrar factor ─────────────────────────────────────
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 4))
-        tk.Label(body, text="RECALIBRAR FACTOR",
+        tk.Label(body, text=t("recalibrate"),
                  bg=BG, fg=DIM, font=f_hd).pack(anchor="w")
         tk.Label(body,
                  text="Abre claude.ai/settings y dime los % actuales.\n"
@@ -139,55 +187,75 @@ class SettingsWindow:
         self.var_recal_week = tk.StringVar(value="")
         self._entry(rec, self.var_recal_week, f_md, WEEK_BAR).grid(row=1, column=1, sticky="ew", padx=(8, 0))
 
-        tk.Button(body, text="Recalibrar factor", bg="#3b5bdb", fg="white", bd=0,
+        tk.Button(body, text=t("recalibrate_btn"), bg="#3b5bdb", fg="white", bd=0,
                   font=f_md, padx=8, pady=3,
                   activebackground="#2d4cc7", activeforeground="white",
                   command=self._recalibrate_factor).pack(fill="x", pady=(8, 0))
 
-        # Separador
-        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=10)
-
         # ── Sección 2: Ajustes generales ──────────────────────────────────────
-        tk.Label(body, text="AJUSTES GENERALES", bg=BG, fg=DIM,
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=10)
+        tk.Label(body, text=t("general"), bg=BG, fg=DIM,
                  font=f_hd).pack(anchor="w")
 
         gen = tk.Frame(body, bg=BG)
         gen.pack(fill="x", pady=(6, 0))
         gen.columnconfigure(1, weight=1)
 
-        tk.Label(gen, text="Limite semanal (M tok)", bg=BG, fg=DIM,
+        tk.Label(gen, text=t("weekly_limit"), bg=BG, fg=DIM,
                  font=f_sm, width=22, anchor="w").grid(row=0, column=0, sticky="w", pady=2)
         wl_m = round(self.runtime_cfg.get("weekly_limit", CLAUDE_PRO_WEEKLY_LIMIT) / 1_000_000, 2)
         self.var_weekly_m = tk.StringVar(value=str(wl_m))
-        self._entry(gen, self.var_weekly_m, f_md, WHITE).grid(row=0, column=1, sticky="ew", padx=(8,0))
+        self._entry(gen, self.var_weekly_m, f_md, WHITE).grid(row=0, column=1, sticky="ew", padx=(8, 0))
 
-        tk.Label(gen, text="Presupuesto diario (USD)", bg=BG, fg=DIM,
+        tk.Label(gen, text=t("daily_budget"), bg=BG, fg=DIM,
                  font=f_sm, width=22, anchor="w").grid(row=1, column=0, sticky="w", pady=2)
         self.var_budget = tk.StringVar(value=str(round(self.runtime_cfg.get("daily_budget", 10.0), 2)))
-        self._entry(gen, self.var_budget, f_md, WHITE).grid(row=1, column=1, sticky="ew", padx=(8,0))
+        self._entry(gen, self.var_budget, f_md, WHITE).grid(row=1, column=1, sticky="ew", padx=(8, 0))
 
-        tk.Button(body, text="Guardar", bg=BG3, fg=TEXT, bd=0,
+        tk.Button(body, text=t("save"), bg=BG3, fg=TEXT, bd=0,
                   font=f_md, padx=8, pady=3,
                   activebackground=BG2, activeforeground=WHITE,
-                  command=self._save_general).pack(fill="x", pady=(10, 2))
-
-        # Status
-        self.lbl_status = tk.Label(body, text="", bg=BG, fg=DIM, font=f_sm)
-        self.lbl_status.pack(anchor="w", pady=(4, 0))
+                  command=self._save_general).pack(fill="x", pady=(10, 6))
 
     def _entry(self, parent, var, font, hl_color) -> tk.Entry:
         return tk.Entry(parent, textvariable=var, bg=BG3, fg=WHITE, font=font,
                         insertbackground=WHITE, bd=0, highlightthickness=1,
                         highlightbackground=BORDER, highlightcolor=hl_color)
 
+    # ── scroll autohide ───────────────────────────────────────────────────────
+
+    def _on_scroll(self, first: str, last: str) -> None:
+        self._scrollbar.set(first, last)
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            if self._scrollbar.winfo_ismapped():
+                self._scrollbar.grid_remove()
+        else:
+            if not self._scrollbar.winfo_ismapped():
+                self._scrollbar.grid(row=0, column=1, sticky="ns")
+
+    # ── idioma ────────────────────────────────────────────────────────────────
+
+    def _save_language(self) -> None:
+        lang = self.var_lang.get()
+        set_lang(lang)
+        self.runtime_cfg["language"] = lang
+        self._persist()
+        self.on_save(self.runtime_cfg)
+        self.lbl_status.config(text=t("saved") + " ✓", fg=CLAUDE_C)
+
+    # ── proveedores ───────────────────────────────────────────────────────────
+
+    def _save_providers(self) -> None:
+        self.runtime_cfg["show_claude"] = self.var_show_claude.get()
+        self.runtime_cfg["show_codex"]  = self.var_show_codex.get()
+        self.runtime_cfg["show_gemini"] = self.var_show_gemini.get()
+        self._persist()
+        self.on_save(self.runtime_cfg)
+        self.lbl_status.config(text=t("visibility"), fg=CLAUDE_C)
+
     # ── calibración ───────────────────────────────────────────────────────────
 
     def _calibrate(self) -> None:
-        """
-        Lee los tokens actuales del scanner y back-calcula los límites:
-          session_limit = tokens_5h / (session_pct / 100)
-          weekly_limit  = tokens_week / (weekly_pct / 100)
-        """
         try:
             sess_pct  = float(self.var_sess_pct.get()) / 100
             week_pct  = float(self.var_week_pct.get()) / 100
@@ -200,9 +268,9 @@ class SettingsWindow:
             self.lbl_status.config(text="Los % deben ser > 0", fg="#e07348")
             return
 
-        snap = self.state.snapshot()
-        tok_5h   = snap.get("cl_5h_out", 0)
-        tok_week = snap.get("cl_week_out", 0)
+        snap     = self.state.snapshot()
+        tok_5h   = snap.get("cl_5h_out",   0)
+        tok_week = snap.get("cl_week_out",  0)
 
         if tok_5h == 0:
             self.lbl_status.config(
@@ -211,8 +279,7 @@ class SettingsWindow:
             return
         if tok_week == 0:
             self.lbl_status.config(
-                text="Sin output tokens esta semana.\n"
-                     "Espera 5s y reintenta.", fg="#e07348")
+                text="Sin output tokens esta semana.\nEspera 5s y reintenta.", fg="#e07348")
             return
 
         session_limit = int(tok_5h   / sess_pct)
@@ -225,26 +292,18 @@ class SettingsWindow:
         self.runtime_cfg["sess_reset_min"]     = reset_min
         self.runtime_cfg["calibration_time"]   = datetime.now().isoformat()
         self.runtime_cfg["calibration_tok_5h"] = tok_5h
-        self.runtime_cfg["calibration_factor"] = 1.0   # reset al recalibrar límites
+        self.runtime_cfg["calibration_factor"] = 1.0
 
         self._persist()
         self.on_save(self.runtime_cfg)
-
-        # Actualizar campo de límite semanal con el valor calculado
         self.var_weekly_m.set(str(round(weekly_limit / 1_000_000, 2)))
+        self.lbl_status.config(
+            text=f"Calibrado:\n  sesion={session_limit:,}\n  semanal={weekly_limit:,}",
+            fg=SESS_BAR)
 
-        msg = (f"Calibrado:\n"
-               f"  sesion limit  = {session_limit:,} tok\n"
-               f"  semanal limit = {weekly_limit:,} tok")
-        self.lbl_status.config(text=msg, fg=SESS_BAR)
-
-    # ── guardar general ───────────────────────────────────────────────────────
+    # ── recalibrar factor ─────────────────────────────────────────────────────
 
     def _recalibrate_factor(self) -> None:
-        """
-        Calcula el factor de corrección comparando % de la web con output_tokens del monitor.
-        No cambia session_limit ni weekly_limit — solo ajusta el multiplicador.
-        """
         try:
             web_sess_pct = float(self.var_recal_sess.get()) / 100
             web_week_pct = float(self.var_recal_week.get()) / 100
@@ -278,20 +337,19 @@ class SettingsWindow:
 
         if tok_week > 0 and weekly_limit > 0:
             monitor_week_raw = tok_week / weekly_limit
-            factor_week      = web_week_pct / monitor_week_raw
-            factor           = round((factor_sess + factor_week) / 2, 4)
+            factor           = round((factor_sess + web_week_pct / monitor_week_raw) / 2, 4)
         else:
             factor = round(factor_sess, 4)
 
         self.runtime_cfg["calibration_factor"] = factor
         self._persist()
         self.on_save(self.runtime_cfg)
-
-        resultado_pct = min(monitor_sess_raw * factor, 1.0) * 100
+        resultado = min(monitor_sess_raw * factor, 1.0) * 100
         self.lbl_status.config(
-            text=f"Factor: x{factor:.3f}  "
-                 f"({monitor_sess_raw*100:.1f}% -> {resultado_pct:.1f}%)",
+            text=f"Factor: x{factor:.3f}  ({monitor_sess_raw*100:.1f}%→{resultado:.1f}%)",
             fg=SESS_BAR)
+
+    # ── ajustes generales ─────────────────────────────────────────────────────
 
     def _save_general(self) -> None:
         try:
@@ -301,12 +359,12 @@ class SettingsWindow:
             self.lbl_status.config(text="Error: valores invalidos", fg="#e07348")
             return
 
-        self.runtime_cfg["weekly_limit"]  = int(weekly_m * 1_000_000)
-        self.runtime_cfg["daily_budget"]  = budget
+        self.runtime_cfg["weekly_limit"]     = int(weekly_m * 1_000_000)
+        self.runtime_cfg["daily_budget"]     = budget
         self.runtime_cfg["weekly_reset_str"] = self.var_week_reset.get().strip()
         self._persist()
         self.on_save(self.runtime_cfg)
-        self.lbl_status.config(text="Guardado", fg=CLAUDE_C)
+        self.lbl_status.config(text=t("saved"), fg=CLAUDE_C)
         self.win.after(1200, self.win.destroy)
 
     # ── persistencia ─────────────────────────────────────────────────────────
@@ -324,11 +382,15 @@ class SettingsWindow:
                 "sess_reset_min":       self.runtime_cfg.get("sess_reset_min", 0),
                 "calibration_time":     self.runtime_cfg.get("calibration_time", ""),
                 "calibration_factor":   self.runtime_cfg.get("calibration_factor", 1.0),
+                "show_claude":          self.runtime_cfg.get("show_claude",  True),
+                "show_codex":           self.runtime_cfg.get("show_codex",   True),
+                "show_gemini":          self.runtime_cfg.get("show_gemini",  True),
+                "language":             self.runtime_cfg.get("language", "es"),
             })
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             CONFIG_PATH.write_text(json.dumps(raw, indent=2, ensure_ascii=False))
         except Exception as e:
-            self.lbl_status.config(text=f"Error guardando: {e}", fg="#e07348")
+            self.lbl_status.config(text=f"Error: {e}", fg="#e07348")
 
     # ── drag ─────────────────────────────────────────────────────────────────
 

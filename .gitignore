@@ -29,6 +29,10 @@ build/
 Thumbs.db
 desktop.ini
 
-# Logs locales
+# Logs locales (git no trackea rutas fuera del repo, pero por claridad:)
+# Los archivos de runtime del monitor viven fuera del repo:
+#   ~/.token-monitor/       (wrapper scripts, logs CSV, codex.log)
+#   ~/.config/token-monitor/ (config.json con rutas de tu máquina)
+# Si alguien creara accidentalmente estas carpetas DENTRO del repo:
+.token-monitor/
 *.log
-~/.token-monitor/

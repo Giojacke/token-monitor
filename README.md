@@ -3,7 +3,7 @@
 
   # Token Monitor
 
-  **Monitor en tiempo real del consumo de tokens de Claude Code y Codex CLI**
+  **Monitor en tiempo real del consumo de tokens de Claude Code, Codex CLI y Gemini CLI**
 
   ![version](https://img.shields.io/badge/version-1.0.0-green)
   ![license](https://img.shields.io/badge/license-MIT-green)
@@ -15,14 +15,16 @@
 
 ## ¿Qué es esto?
 
-Una pantalla flotante de escritorio que lee en tiempo real los logs de **Claude Code** y **Codex CLI** y muestra:
+Una pantalla flotante de escritorio que lee en tiempo real los logs de **Claude Code**, **Codex CLI** y **Gemini CLI** y muestra:
 
-- Tokens consumidos por sesión (ventana de 5h) y acumulados por semana, mes y año
-- Modelo detectado automáticamente (`claude-sonnet-4-6`, `gpt-5.4`, etc.)
+- Tokens consumidos por sesión (ventana de 5h) y acumulados por día, semana, mes y año
+- Modelo detectado automáticamente (`claude-sonnet-4-6`, `gpt-5.4`, `gemini-2.5-pro`, etc.)
 - Costo estimado en dólares usando precios reales de API por modelo
 - Barra de uso calibrable contra `claude.ai/settings` con factor de corrección
-- System tray de Windows con tooltip de uso en tiempo real
+- System tray de Windows con tooltip de uso en tiempo real — arranca minimizado por defecto
 - Scroll vertical para agregar más proveedores sin romper el layout
+- **Logs diarios en CSV** guardados automáticamente en `~/.token-monitor/logs/`
+- **Interfaz en español e inglés** — cambiable en ⚙ sin reiniciar
 
 ---
 
@@ -59,6 +61,8 @@ python -m token_monitor --budget 20
 python -m token_monitor --redetect
 ```
 
+> Al arrancar, el monitor se minimiza automáticamente al system tray. El ícono queda visible con un tooltip de uso en tiempo real.
+
 ---
 
 ## ¿Cómo funciona?
@@ -75,6 +79,26 @@ La barra de sesión se calibra contra `claude.ai/settings` con un **factor de co
 
 Codex escribe sus sesiones en `~/.codex/sessions/**/rollout-*.jsonl`. El monitor detecta el modelo en los eventos `turn_context` (campo `payload.model`) y acumula tokens desde los eventos `token_count` usando `last_token_usage` — no `total_token_usage` — para evitar doble conteo al sumar línea a línea.
 
+### Gemini CLI
+
+Gemini CLI escribe sus chats en `~/.gemini/tmp/<usuario>/chats/session-*.jsonl`. El monitor detecta dinámicamente el subdirectorio del usuario (con fallback automático para entornos corporativos o Docker).
+
+El JSONL de Gemini usa un patrón de append-update donde la misma entrada puede aparecer múltiples veces. El monitor deduplica por `id` para evitar doble conteo.
+
+---
+
+## Logs diarios
+
+El monitor guarda un resumen diario en `~/.token-monitor/logs/YYYY-MM-DD.txt` con formato CSV:
+
+```
+provider,model,date,tokens_in,tokens_out,tokens_cached,requests,cost_usd
+claude,sonnet-4-6,2026-06-02,284231,3667,272564,15,0.055005
+gemini,gemini-3-flash-preview,2026-06-02,55944,502,22626,9,0.000433
+```
+
+El archivo se actualiza cada 60 segundos (sobreescribe el del día actual). Ideal para auditoría o importar a hojas de cálculo.
+
 ---
 
 ## Estructura del proyecto
@@ -83,16 +107,19 @@ Codex escribe sus sesiones en `~/.codex/sessions/**/rollout-*.jsonl`. El monitor
 token_monitor/
 ├── __main__.py        Bootstrap — detección, scanners, UI, tray
 ├── config.py          Constantes, precios por modelo, colores, tamaños
-├── detector.py        Detección de Claude Code y Codex CLI instalados
+├── detector.py        Detección de Claude Code, Codex CLI y Gemini CLI
 ├── parser.py          Parseo de JSONL y cálculo de costo por modelo
 ├── state.py           Estado compartido thread-safe entre scanners y UI
 ├── scanner.py         Scanner de JSONL de Claude Code
 ├── codex_scanner.py   Scanner de JSONL de Codex CLI
 ├── codex_status.py    Poller de `codex /status` para rate-limits en vivo
+├── gemini_scanner.py  Scanner de JSONL de Gemini CLI
 ├── wrapper.py         Generación de scripts wrapper para Codex en tiempo real
 ├── ui.py              Interfaz Tkinter flotante con scroll
 ├── tray.py            Integración system tray
 ├── settings_ui.py     Ventana de configuración y calibración
+├── i18n.py            Internacionalización — español e inglés
+├── log_writer.py      Logger diario en CSV (~/.token-monitor/logs/)
 ├── demo.py            Inyector de datos demo
 └── assets/            Íconos de la aplicación
 assets/
@@ -131,6 +158,15 @@ assets/
 | o3 | $10.00 | $2.50 | $40.00 |
 | o4-mini | $1.10 | $0.275 | $4.40 |
 
+### Gemini CLI (Google) — precios USD por millón de tokens
+
+| Modelo | Input | Cached | Output |
+|--------|------:|-------:|-------:|
+| gemini-3-flash-preview | $0.15 | $0.040 | $0.60 |
+| gemini-2.5-pro | $1.25 | $0.310 | $10.00 |
+| gemini-2.5-flash | $0.15 | $0.040 | $0.60 |
+| gemini-2.0-flash | $0.10 | $0.025 | $0.40 |
+
 > Los precios viven en `token_monitor/config.py` como diccionarios. Actualizar un precio = una línea de código.
 
 ---
@@ -145,13 +181,25 @@ Si el porcentaje no coincide con `claude.ai/settings`:
 
 ---
 
+## Idioma
+
+La interfaz soporta **español** e **inglés**. Para cambiar:
+
+1. Abre ⚙ en el monitor
+2. Sección **IDIOMA** → selecciona `es` o `en`
+3. Guarda — el cambio se aplica en el próximo arranque
+
+Para agregar un idioma nuevo, añade una clave en el dict `TEXTOS` de `token_monitor/i18n.py` con el mismo conjunto de keys.
+
+---
+
 ## Roadmap
 
-- [ ] Gemini CLI
+- [x] Gemini CLI
 - [ ] GitHub Copilot
 - [ ] Cursor
 - [ ] Notificaciones de alerta al cruzar umbrales configurables
-- [ ] Exportar historial a CSV
+- [ ] Exportar historial a CSV *(logs diarios ya disponibles en `~/.token-monitor/logs/`)*
 - [ ] Tests automatizados de parsers
 
 ---
@@ -160,9 +208,10 @@ Si el porcentaje no coincide con `claude.ai/settings`:
 
 1. Fork del repo
 2. `git checkout -b feature/nueva-ia`
-3. Para agregar un proveedor nuevo, implementa un scanner siguiendo el patrón de `scanner.py` o `codex_scanner.py`
+3. Para agregar un proveedor nuevo, implementa un scanner siguiendo el patrón de `scanner.py`, `codex_scanner.py` o `gemini_scanner.py`
 4. Los precios del modelo nuevo van en `config.py` como dict `{modelo: {in, cached, out}}`
-5. PR con descripción de qué IA agregaste y cómo detectaste el modelo en sus logs locales
+5. Agrega las claves de traducción necesarias en `i18n.py` (español e inglés)
+6. PR con descripción de qué IA agregaste y cómo detectaste el modelo en sus logs locales
 
 ---
 

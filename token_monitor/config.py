@@ -3,7 +3,8 @@ from pathlib import Path
 # ─── Rutas ────────────────────────────────────────────────────────────────────
 
 PROJECTS_DIR         = Path.home() / ".claude" / "projects"
-CODEX_SESSIONS_DIR   = Path.home() / ".codex" / "sessions"
+CODEX_SESSIONS_DIR   = Path.home() / ".codex"  / "sessions"
+LOGS_DIR             = Path.home() / ".token-monitor" / "logs"
 DEFAULT_DAILY_BUDGET     = 10.00        # USD — sobreescribible con --budget
 
 # ─── Límites de plan Claude Pro ───────────────────────────────────────────────
@@ -56,6 +57,16 @@ CODEX_MODELS_PRICES: dict[str, dict[str, float]] = {
     "default":             {"in": 2.50,  "cached": 0.500,  "out": 10.00},
 }
 
+# ─── Precios por modelo Gemini CLI (USD / millón de tokens) ──────────────────
+
+GEMINI_MODELS_PRICES: dict[str, dict[str, float]] = {
+    "gemini-3-flash-preview": {"in": 0.15,  "cached": 0.040, "out":  0.60},
+    "gemini-2.5-pro":         {"in": 1.25,  "cached": 0.310, "out": 10.00},
+    "gemini-2.5-flash":       {"in": 0.15,  "cached": 0.040, "out":  0.60},
+    "gemini-2.0-flash":       {"in": 0.10,  "cached": 0.025, "out":  0.40},
+    "default":                {"in": 1.25,  "cached": 0.310, "out": 10.00},
+}
+
 # Conservados para compatibilidad con código legacy
 CODEX_PRICE_IN       = 1.10  / 1_000_000
 CODEX_PRICE_CACHED   = 0.275 / 1_000_000
@@ -65,7 +76,7 @@ CODEX_PRICE_OUT      = 4.40  / 1_000_000
 
 REFRESH_MS    = 1_000
 SCAN_INTERVAL = 5
-LOG_LINES     = 5
+LOG_LINES     = 8
 
 # ─── Ventana ──────────────────────────────────────────────────────────────────
 
@@ -83,6 +94,7 @@ CLAUDE_C  = "#e07348"   # naranja — Claude Code
 SESS_BAR  = "#f59e0b"   # ámbar   — barra sesión actual (igual que la web)
 WEEK_BAR  = "#3b82f6"   # azul    — barra semanal (igual que la web)
 CODEX_C   = "#34d399"   # verde   — Codex CLI
+GEMINI_C  = "#4285f4"   # azul Google — Gemini CLI
 DIM       = "#555555"
 TEXT      = "#cccccc"
 WHITE     = "#e8e8e8"

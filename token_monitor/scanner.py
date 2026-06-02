@@ -123,10 +123,11 @@ class TokenScanner:
 
                     total_in = inp + cache_w + cache_r
                     short    = model.replace("claude-", "")
-                    fd["log"].append(
-                        f"[{ts.astimezone().strftime('%H:%M:%S')}]"
-                        f"  {short}  in={total_in:,}  out={out:,}"
-                    )
+                    if ts >= starts["today"]:   # solo entradas de hoy en el log
+                        fd["log"].append(
+                            f"[{ts.astimezone().strftime('%H:%M:%S')}] [cl]"
+                            f"  {short}  in={total_in:,}  out={out:,}"
+                        )
 
                     for period, start_utc in starts.items():
                         if ts >= start_utc:

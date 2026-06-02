@@ -15,6 +15,9 @@ from .scanner import TokenScanner
 from .codex_scanner import CodexScanner
 from .codex_status import CodexStatusPoller
 from .wrapper import create_wrapper_scripts, WrapperScanner, wrapper_log_has_data, CODEX_LOG
+from .gemini_scanner import GeminiScanner
+from .log_writer import DailyLogger
+from .i18n import set_lang
 from .state import TokenState
 from .tray import TrayManager, TRAY_AVAILABLE
 from .ui import TokenMonitorApp
@@ -43,6 +46,14 @@ def _load_runtime_cfg(budget_arg: float) -> dict:
                 cfg["calibration_time"]  = raw["calibration_time"]
             if "calibration_factor" in raw:
                 cfg["calibration_factor"] = float(raw["calibration_factor"])
+            if "show_claude" in raw:
+                cfg["show_claude"] = bool(raw["show_claude"])
+            if "show_codex" in raw:
+                cfg["show_codex"]  = bool(raw["show_codex"])
+            if "show_gemini" in raw:
+                cfg["show_gemini"] = bool(raw["show_gemini"])
+            if "language" in raw:
+                cfg["language"] = raw["language"]
             if "start_minimized" in raw:
                 cfg["start_minimized"]   = bool(raw["start_minimized"])
             if "close_to_tray" in raw:
@@ -134,6 +145,12 @@ def main() -> None:
                 print(f"[token-monitor]            usa ese script en vez de 'codex'")
                 watching.append(f"codex|{sh_path}")   # guarda ruta para el footer
 
+        # Gemini CLI — descubre el directorio dinámicamente
+        if detection.show_gemini:
+            GeminiScanner(state, stop_ev).start()
+            watching.append("gemini")
+            print("[token-monitor] Gemini  -> watching ~/.gemini/tmp/<user>/chats/")
+
         if watching:
             # Construir footer según estado del wrapper
             codex_entry = next((w for w in watching if w.startswith("codex|")), None)
@@ -145,6 +162,7 @@ def main() -> None:
                 footer_msg = "watching " + " + ".join(clean) + "..."
 
     # ── 4. UI ─────────────────────────────────────────────────────────────────
+    set_lang(runtime_cfg.get("language", "es"))
     root = tk.Tk()
 
     # Ícono de ventana / taskbar
@@ -190,6 +208,10 @@ def main() -> None:
 
     # Guardar defaults de tray en config.json si no existen
     _ensure_tray_config()
+
+    # ── 7. Daily CSV logger ───────────────────────────────────────────────────
+    DailyLogger(state, stop_ev).start()
+    print(f"[token-monitor] Logs diarios en: {Path.home() / '.token-monitor' / 'logs'}")
 
     try:
         root.mainloop()
