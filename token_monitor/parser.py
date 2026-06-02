@@ -183,34 +183,91 @@ def calc_codex_cost(inp: int, out: int, cached: int,
     )
 
 
+def _extract_token_counts(obj: dict) -> tuple[int, int, int]:
+    """
+    Extrae (inp, out, cached) de un objeto que puede tener cualquiera de los
+    formatos que usa GitHub Copilot / OpenAI / Anthropic en sus respuestas.
+
+    Formatos manejados:
+      Copilot directo:  token_usage.{input, output, cached}
+                        tokens.{input, output, cached}
+      OpenAI API:       usage.{prompt_tokens, completion_tokens, cached_tokens}
+                        usage.{input_tokens, output_tokens}
+      Anthropic API:    usage.{input_tokens, output_tokens, cache_read_input_tokens}
+      Campos planos:    prompt_tokens, completion_tokens
+      VS Code Chat:     requestTokens, responseTokens, totalTokens (parcial)
+    """
+    def _i(d: dict, *keys) -> int:
+        for k in keys:
+            v = d.get(k)
+            if v and isinstance(v, (int, float)) and v > 0:
+                return int(v)
+        return 0
+
+    # Busca en los sub-dicts de uso más comunes
+    for usage_key in ("token_usage", "tokens", "usage", "tokenUsage", "token_counts"):
+        usage = obj.get(usage_key)
+        if not isinstance(usage, dict):
+            continue
+        inp = _i(usage,
+                 "input", "input_tokens", "prompt_tokens",
+                 "promptTokens", "inputTokens")
+        out = _i(usage,
+                 "output", "output_tokens", "completion_tokens",
+                 "completionTokens", "outputTokens")
+        cached = _i(usage,
+                    "cached", "cached_tokens", "cached_input_tokens",
+                    "cache_read_input_tokens", "cachedTokens",
+                    "cache_creation_input_tokens")
+        if inp or out:
+            return inp, out, cached
+
+    # Campos planos en el objeto raíz
+    inp = _i(obj,
+             "prompt_tokens", "promptTokens", "input_tokens", "inputTokens",
+             "requestTokens")
+    out = _i(obj,
+             "completion_tokens", "completionTokens", "output_tokens", "outputTokens",
+             "responseTokens")
+    cached = _i(obj,
+                "cached_tokens", "cachedTokens", "cache_read_input_tokens")
+
+    # VS Code Chat guarda totalTokens sin split — si no hay inp/out, usa total como out
+    if not (inp or out):
+        total = _i(obj, "totalTokens", "total_tokens")
+        if total:
+            return 0, total, 0
+
+    return inp, out, cached
+
+
 def parse_copilot_entry(obj: dict, fallback_ts=None):
     """
     Parsea un objeto JSON/dict de GitHub Copilot.
 
-    Formatos soportados:
-      {"model": "gpt-5.1", "token_usage": {"input": N, "output": N, "cached": N}, ...}
-      {"model": "claude-sonnet-4.5", "tokens": {"input": N, "output": N}, ...}
+    Formatos soportados (ver _extract_token_counts para detalle):
+      {"model": "gpt-5.1", "token_usage": {"input": N, "output": N}, ...}
+      {"model": "claude-sonnet-4.5", "usage": {"prompt_tokens": N, ...}, ...}
+      {"model": "gpt-4o", "usage": {"input_tokens": N, "output_tokens": N}, ...}
+      {"requestTokens": N, "responseTokens": N, ...}
 
     Devuelve (ts_utc, inp, out, cached, model) o None.
     """
     if not isinstance(obj, dict):
         return None
 
-    model = obj.get("model") or "default"
-
-    usage = obj.get("token_usage") or obj.get("tokens") or {}
-    if not isinstance(usage, dict):
-        return None
-
-    inp    = (usage.get("input")          or usage.get("input_tokens")          or 0)
-    out    = (usage.get("output")         or usage.get("output_tokens")         or 0)
-    cached = (usage.get("cached")         or usage.get("cached_tokens")
-              or usage.get("cached_input_tokens")                               or 0)
-
+    inp, out, cached = _extract_token_counts(obj)
     if not (inp or out or cached):
         return None
 
-    ts_raw = (obj.get("timestamp") or obj.get("created_at") or obj.get("time") or "")
+    # Modelo — prueba varios campos
+    model = (obj.get("model") or obj.get("modelId") or obj.get("model_id")
+             or obj.get("engine") or "default")
+    if not isinstance(model, str):
+        model = "default"
+
+    ts_raw = (obj.get("timestamp") or obj.get("created_at") or obj.get("time")
+              or obj.get("created") or obj.get("date") or "")
     try:
         ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
     except Exception:
