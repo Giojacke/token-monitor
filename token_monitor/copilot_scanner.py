@@ -1,21 +1,16 @@
 """
-Scanner de GitHub Copilot — busca en todos los lugares donde la extensión
-de VS Code puede escribir logs o storage con datos de tokens.
+Scanner de GitHub Copilot.
 
 Rutas buscadas (Windows):
-  %APPDATA%\\GitHub Copilot\\
-  %LOCALAPPDATA%\\GitHub Copilot\\
-  %APPDATA%\\Code\\User\\globalStorage\\github.copilot\\
-  %APPDATA%\\Code\\User\\globalStorage\\github.copilot-chat\\
-  %APPDATA%\\Code\\logs\\<sesion>\\exthost\\GitHub.copilot*\\   (logs extensión)
-  %APPDATA%\\Code\\logs\\<sesion>\\exthost\\GitHub.copilot-chat*\\
+  %APPDATA%\\Code\\logs\\<sesion>\\window*\\exthost\\GitHub.copilot*\\  ← logs VS Code
+  %APPDATA%\\Code\\User\\globalStorage\\github.copilot(-chat)\\          ← storage JSON/JSONL
+  %APPDATA%\\GitHub Copilot\\, %LOCALAPPDATA%\\GitHub Copilot\\           ← app standalone
 
 Formatos manejados:
-  JSON/JSONL puros
-  Archivos .log con líneas "[timestamp] {json}"
-  Respuestas OpenAI: usage.prompt_tokens / completion_tokens
-  Respuestas Anthropic: usage.input_tokens / output_tokens
-  Respuestas Copilot: token_usage.input / output  o  tokens.input / output
+  VS Code plain-text log: "YYYY-MM-DD HH:MM:SS.mmm [level] [fetchCompletions/Chat] ... 200"
+    → cuenta requests exitosos; sin token data disponible
+  JSON/JSONL con token_usage / usage / tokens
+    → extrae in/out/cached tokens cuando están presentes
 """
 
 import json
@@ -30,97 +25,137 @@ from .config import SCAN_INTERVAL
 from .parser import parse_copilot_entry, calc_copilot_cost
 from .state import TokenState, PERIODS
 
-# Extensiones de archivo que se escanean
 _LOG_EXTS = {".jsonl", ".json", ".log"}
 
-# Regex para extraer JSON de líneas de log con prefijo de timestamp
-#   "[2026-06-01 12:34:56.789] {json...}"
-_RE_LOG_LINE = re.compile(r"^\[.*?\]\s+(\{.*)")
+# Regex para extraer JSON de líneas "[timestamp] {json}" (formato antiguo de logs)
+_RE_JSON_IN_LOG = re.compile(r"^\[.*?\]\s+(\{.*)")
+
+# VS Code plain-text log: "2026-05-30 22:36:30.347 [info] [fetchCompletions] Request ... finished with 200"
+# Captura: (1) timestamp, (2) model from URL (puede ser ""), (3) endpoint, (4) status code
+_RE_VSCODE_FETCH = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+    r" \[\w+\] \[fetch\w*\] Request \S+ at "
+    r"<https://[^>]+/(?:engines/([^/]+)/)?(\w+)>"
+    r" finished with (\d+)"
+)
 
 
-def _vscode_exthost_copilot_dirs(appdata: str) -> list[Path]:
+def _is_vscode_plain_log(first_line: str) -> bool:
+    return bool(re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", first_line.lstrip()))
+
+
+def _parse_vscode_plain_log_entries(raw: str) -> list[tuple]:
     """
-    Busca los directorios exthost de GitHub Copilot en los logs de VS Code.
-    Toma las 5 sesiones más recientes para no leer logs viejos.
+    Parsea logs planos de VS Code buscando requests Copilot con status 200.
+    Retorna lista de (ts_utc, inp=0, out=0, cached=0, model).
+    Sin tokens disponibles; solo cuenta requests.
+    """
+    entries: list[tuple] = []
+    for line in raw.splitlines():
+        m = _RE_VSCODE_FETCH.match(line.strip())
+        if not m:
+            continue
+        ts_str, model_url, endpoint, status = m.group(1), m.group(2) or "", m.group(3) or "", m.group(4)
+        if status != "200":
+            continue
+        try:
+            ts_naive = datetime.fromisoformat(ts_str.replace(" ", "T"))
+            ts = ts_naive.astimezone(timezone.utc)
+        except Exception:
+            ts = datetime.now(timezone.utc)
+        # Limpia nombre de modelo: "gpt-41-copilot" → "gpt-41"
+        model = (model_url or endpoint).replace("-copilot", "").replace("copilot-", "") or "gpt-4o"
+        entries.append((ts, 0, 0, 0, model))
+    return entries
+
+
+def _vscode_exthost_copilot_dirs(logs_dir: str) -> list[Path]:
+    """
+    Busca directorios GitHub.copilot* en:
+      <logs_dir>/<session>/exthost/          (VS Code clásico)
+      <logs_dir>/<session>/window*/exthost/  (VS Code >= 1.85)
+    Toma las 5 sesiones más recientes.
     """
     dirs: list[Path] = []
-    logs_base = Path(appdata) / "Code" / "logs"
+    logs_base = Path(logs_dir)
     if not logs_base.exists():
         return dirs
     try:
         sessions = sorted(
             (d for d in logs_base.iterdir() if d.is_dir()),
-            key=lambda d: d.stat().st_mtime, reverse=True
+            key=lambda d: d.stat().st_mtime, reverse=True,
         )[:5]
     except Exception:
         return dirs
+
     for session in sessions:
-        exthost = session / "exthost"
-        if not exthost.exists():
-            continue
+        # Candidatos a exthost: session/exthost + session/window*/exthost
+        parents = [session]
         try:
-            for ext_dir in exthost.iterdir():
-                if "copilot" in ext_dir.name.lower() and ext_dir.is_dir():
-                    dirs.append(ext_dir)
+            for child in session.iterdir():
+                if child.is_dir() and re.match(r"^window\d*$", child.name):
+                    parents.append(child)
         except Exception:
             pass
+
+        for parent in parents:
+            exthost = parent / "exthost"
+            if not exthost.exists():
+                continue
+            try:
+                for ext_dir in exthost.iterdir():
+                    if "copilot" in ext_dir.name.lower() and ext_dir.is_dir():
+                        dirs.append(ext_dir)
+            except Exception:
+                pass
     return dirs
 
 
 def find_copilot_dirs() -> list[Path]:
-    """
-    Retorna todos los directorios donde Copilot puede escribir datos.
-    Imprime diagnóstico completo en stdout.
-    """
+    """Retorna los directorios donde Copilot puede escribir datos (sin prints)."""
     candidates: list[Path] = []
     home = Path.home()
-
-    appdata      = os.environ.get("APPDATA", "")
+    appdata = os.environ.get("APPDATA", "")
     localappdata = os.environ.get("LOCALAPPDATA", "")
 
-    # ── Windows: Roaming AppData ──────────────────────────────────────────────
     if appdata:
         candidates += [
             Path(appdata) / "GitHub Copilot",
             Path(appdata) / "Code" / "User" / "globalStorage" / "github.copilot",
             Path(appdata) / "Code" / "User" / "globalStorage" / "github.copilot-chat",
         ]
-        candidates += _vscode_exthost_copilot_dirs(appdata)
+        candidates += _vscode_exthost_copilot_dirs(str(Path(appdata) / "Code" / "logs"))
 
-    # ── Windows: Local AppData ────────────────────────────────────────────────
     if localappdata:
         candidates += [
             Path(localappdata) / "GitHub Copilot",
             Path(localappdata) / "Programs" / "GitHub Copilot",
         ]
 
-    # ── Mac ───────────────────────────────────────────────────────────────────
     candidates += [
         home / "Library" / "Application Support" / "GitHub Copilot",
         home / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "github.copilot",
         home / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "github.copilot-chat",
     ]
-    mac_logs = home / "Library" / "Application Support" / "Code" / "logs"
-    if mac_logs.exists():
-        candidates += _vscode_exthost_copilot_dirs(str(mac_logs.parent.parent))
+    candidates += _vscode_exthost_copilot_dirs(
+        str(home / "Library" / "Application Support" / "Code" / "logs")
+    )
 
-    # ── Linux ─────────────────────────────────────────────────────────────────
     xdg = os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))
     candidates += [
         Path(xdg) / "github-copilot",
         home / ".config" / "Code" / "User" / "globalStorage" / "github.copilot",
         home / ".config" / "Code" / "User" / "globalStorage" / "github.copilot-chat",
     ]
+    candidates += _vscode_exthost_copilot_dirs(str(home / ".config" / "Code" / "logs"))
 
+    # Deduplica y filtra solo los existentes
+    seen: set[Path] = set()
     found: list[Path] = []
     for d in candidates:
-        exists = d.exists()
-        print(f"[copilot] buscando en: {d}  →  {'OK' if exists else 'no existe'}")
-        if exists:
+        if d not in seen and d.exists():
+            seen.add(d)
             found.append(d)
-
-    if not found:
-        print("[copilot] ningún directorio encontrado — Copilot no instalado o ruta desconocida")
     return found
 
 
@@ -140,10 +175,7 @@ def find_copilot_log_files(dirs: list[Path] | None = None) -> list[Path]:
 
 
 def _extract_entries_from_text(raw: str, suffix: str) -> list[dict]:
-    """
-    Extrae objetos dict de texto crudo según el formato del archivo.
-    Maneja: JSONL, JSON, archivos .log con prefijo de timestamp.
-    """
+    """Extrae objetos dict de texto crudo según formato del archivo (JSON/JSONL/log con JSON)."""
     entries: list[dict] = []
 
     if suffix == ".jsonl":
@@ -164,8 +196,7 @@ def _extract_entries_from_text(raw: str, suffix: str) -> list[dict]:
             line = line.strip()
             if not line:
                 continue
-            # Intenta extraer JSON de "[timestamp] {json}"
-            m = _RE_LOG_LINE.match(line)
+            m = _RE_JSON_IN_LOG.match(line)
             json_str = m.group(1) if m else (line if line.startswith("{") else None)
             if json_str:
                 try:
@@ -176,14 +207,13 @@ def _extract_entries_from_text(raw: str, suffix: str) -> list[dict]:
                     pass
         return entries
 
-    # .json — puede ser objeto único, array, o JSONL encubierto
+    # .json — objeto único, array, o JSONL encubierto
     try:
         parsed = json.loads(raw)
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict):
                     entries.append(item)
-                    # Si el item tiene sub-listas (e.g. sessions[].exchanges[]), las aplana
                     for v in item.values():
                         if isinstance(v, list):
                             for sub in v:
@@ -191,14 +221,12 @@ def _extract_entries_from_text(raw: str, suffix: str) -> list[dict]:
                                     entries.append(sub)
         elif isinstance(parsed, dict):
             entries.append(parsed)
-            # Aplana listas de primer nivel
             for v in parsed.values():
                 if isinstance(v, list):
                     for sub in v:
                         if isinstance(sub, dict):
                             entries.append(sub)
     except Exception:
-        # Fallback: línea a línea
         for line in raw.splitlines():
             line = line.strip()
             if not line:
@@ -228,13 +256,15 @@ def _period_starts() -> dict[str, datetime]:
 class CopilotScanner:
     """
     Escanea los directorios de GitHub Copilot cada SCAN_INTERVAL segundos.
+    Los directorios se descubren una sola vez y se cachean para evitar spam de prints.
     """
 
     def __init__(self, state: TokenState, stop_event: threading.Event):
         self.state         = state
         self._stop         = stop_event
         self._cache: dict  = {}
-        self._first_scan   = True   # imprime diagnóstico solo en el primer ciclo
+        self._dirs: list[Path] | None = None   # se descubre una vez en el primer scan
+        self._first_scan   = True
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
@@ -250,7 +280,18 @@ class CopilotScanner:
             time.sleep(SCAN_INTERVAL)
 
     def _scan(self) -> None:
-        all_files = find_copilot_log_files()
+        # Descubrir directorios solo la primera vez
+        if self._dirs is None:
+            self._dirs = find_copilot_dirs()
+            if self._first_scan:
+                if self._dirs:
+                    print(f"[copilot] directorios encontrados: {len(self._dirs)}")
+                    for d in self._dirs:
+                        print(f"[copilot]   {d}")
+                else:
+                    print("[copilot] ningún directorio encontrado — Copilot no instalado o ruta desconocida")
+
+        all_files = find_copilot_log_files(self._dirs)
 
         if self._first_scan:
             if all_files:
@@ -258,7 +299,6 @@ class CopilotScanner:
                 for f in all_files:
                     try:
                         size = f.stat().st_size
-                        # Muestra las primeras 200 chars para diagnóstico de formato
                         sample = f.read_text(encoding="utf-8", errors="replace")[:200]
                         sample = sample.replace("\n", " ").replace("\r", "")
                         print(f"[copilot]   {f.name} ({size} bytes)  muestra: {sample!r}")
@@ -320,24 +360,27 @@ class CopilotScanner:
         except Exception:
             return fd
 
-        entries = _extract_entries_from_text(raw_text, path.suffix.lower())
+        # Detectar si es log plano de VS Code (YYYY-MM-DD HH:MM:SS.mmm [level] ...)
+        first_line = (raw_text.lstrip() + "\n").split("\n", 1)[0]
+        if _is_vscode_plain_log(first_line):
+            parsed_entries = _parse_vscode_plain_log_entries(raw_text)
+            if self._first_scan:
+                print(f"[copilot]   {path.name}: {len(parsed_entries)} requests 200 (log VS Code — sin tokens)")
+        else:
+            json_objs = _extract_entries_from_text(raw_text, path.suffix.lower())
+            try:
+                file_mtime_utc = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            except Exception:
+                file_mtime_utc = datetime.now(timezone.utc)
+            parsed_entries = []
+            for obj in json_objs:
+                r = parse_copilot_entry(obj, file_mtime_utc)
+                if r:
+                    parsed_entries.append(r)
+            if self._first_scan and json_objs:
+                print(f"[copilot]   {path.name}: {len(parsed_entries)}/{len(json_objs)} entradas con tokens")
 
-        if self._first_scan and entries:
-            print(f"[copilot]   {path.name}: {len(entries)} entradas JSON")
-
-        try:
-            file_mtime_utc = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-        except Exception:
-            file_mtime_utc = datetime.now(timezone.utc)
-
-        parsed_count = 0
-        for obj in entries:
-            r = parse_copilot_entry(obj, file_mtime_utc)
-            if not r:
-                continue
-            ts, inp, out, cached, model = r
-            parsed_count += 1
-
+        for ts, inp, out, cached, model in parsed_entries:
             cost = calc_copilot_cost(inp, out, cached, model)
 
             fd["sess"]["in"]     += inp
@@ -348,10 +391,16 @@ class CopilotScanner:
             fd["last_model"]      = model
 
             if ts >= starts["today"]:
-                fd["log"].append(
-                    f"[{ts.astimezone().strftime('%H:%M:%S')}] [cp]"
-                    f"  {model}  in={inp + cached:,}  out={out:,}"
-                )
+                if inp or out:
+                    fd["log"].append(
+                        f"[{ts.astimezone().strftime('%H:%M:%S')}] [cp]"
+                        f"  {model}  in={inp + cached:,}  out={out:,}"
+                    )
+                else:
+                    fd["log"].append(
+                        f"[{ts.astimezone().strftime('%H:%M:%S')}] [cp]"
+                        f"  {model}  req+1"
+                    )
 
             for period, start_utc in starts.items():
                 if ts >= start_utc:
@@ -360,8 +409,5 @@ class CopilotScanner:
                     fd[period]["cached"] += cached
                     fd[period]["req"]    += 1
                     fd[period]["cost"]   += cost
-
-        if self._first_scan and entries:
-            print(f"[copilot]   {path.name}: {parsed_count}/{len(entries)} entradas con tokens")
 
         return fd

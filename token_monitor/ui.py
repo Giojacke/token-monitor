@@ -759,8 +759,8 @@ class TokenMonitorApp:
                 month_req    = snap.get("cp_month_req",  0)
 
                 if cp_plan == "free":
-                    # barra: requests este mes / 50 (límite free)
-                    free_limit = COPILOT_PLANES["free"]["chat_requests_mes"]
+                    # barra: completions este mes / 2000 (lo que realmente se loguea)
+                    free_limit = COPILOT_PLANES["free"].get("completions_mes", 2000)
                     pct = min(month_req / free_limit, 1.0) if free_limit > 0 else 0
                 elif cp_plan == "pro":
                     credits = COPILOT_PLANES["pro"]["ai_credits_mes"]
