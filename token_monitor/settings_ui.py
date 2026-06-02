@@ -131,7 +131,22 @@ class SettingsWindow:
 
         self.lbl_plan_note = tk.Label(
             body, text="", bg=BG, fg=DIM, font=f_sm, justify="left", wraplength=280)
-        self.lbl_plan_note.pack(anchor="w", pady=(0, 2))
+        self.lbl_plan_note.pack(anchor="w", pady=(0, 4))
+
+        # Campo de referencia mensual — visible solo para planes pagos
+        self._ref_frame = tk.Frame(body, bg=BG)
+        ref_inner = tk.Frame(self._ref_frame, bg=BG)
+        ref_inner.pack(fill="x")
+        ref_inner.columnconfigure(1, weight=1)
+        tk.Label(ref_inner, text=t("copilot_req_ref_label"), bg=BG, fg=COPILOT_C,
+                 font=f_sm, width=22, anchor="w").grid(row=0, column=0, sticky="w")
+        self.var_copilot_req_ref = tk.StringVar(
+            value=str(self.runtime_cfg.get("copilot_req_ref", 500)))
+        ent = self._entry(ref_inner, self.var_copilot_req_ref, f_md, COPILOT_C)
+        ent.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ent.bind("<Return>",    lambda e: self._save_req_ref())
+        ent.bind("<FocusOut>",  lambda e: self._save_req_ref())
+
         self._update_plan_note()
 
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 6))
@@ -274,19 +289,40 @@ class SettingsWindow:
     def _update_plan_note(self) -> None:
         plan = self.var_copilot_plan.get()
         info = COPILOT_PLANES.get(plan, {})
+        ref  = self.runtime_cfg.get("copilot_req_ref", 500)
+
         if plan == "free":
             note = t("copilot_plan_note_free").format(
                 chat=info.get("chat_requests_mes", 50),
                 completions=info.get("completions_mes", 2000))
+            show_ref = False
         elif plan in ("pro", "pro_plus"):
-            note = t("copilot_plan_note_pro").format(
-                credits=info.get("ai_credits_mes", 10))
+            note = t("copilot_plan_note_pro").format(ref=ref)
+            show_ref = True
         elif plan in ("business", "enterprise"):
-            note = t("copilot_plan_note_enterprise")
+            note = t("copilot_plan_note_enterprise").format(ref=ref)
+            show_ref = True
         else:
             note = t("copilot_plan_note_unknown")
+            show_ref = False
+
         if hasattr(self, "lbl_plan_note"):
             self.lbl_plan_note.config(text=note)
+        if hasattr(self, "_ref_frame"):
+            if show_ref:
+                self._ref_frame.pack(anchor="w", fill="x", pady=(0, 2))
+            else:
+                self._ref_frame.pack_forget()
+
+    def _save_req_ref(self) -> None:
+        try:
+            ref = max(1, int(self.var_copilot_req_ref.get().replace(",", "").strip()))
+        except ValueError:
+            return
+        self.runtime_cfg["copilot_req_ref"] = ref
+        self._persist()
+        self.on_save(self.runtime_cfg)
+        self._update_plan_note()
 
     # ── idioma ────────────────────────────────────────────────────────────────
 
@@ -443,6 +479,7 @@ class SettingsWindow:
                 "show_gemini":          self.runtime_cfg.get("show_gemini",   True),
                 "show_copilot":         self.runtime_cfg.get("show_copilot",  True),
                 "copilot_plan":         self.runtime_cfg.get("copilot_plan", "unknown"),
+                "copilot_req_ref":      self.runtime_cfg.get("copilot_req_ref", 500),
                 "language":             self.runtime_cfg.get("language", "es"),
             })
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

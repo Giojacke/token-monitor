@@ -759,20 +759,13 @@ class TokenMonitorApp:
                 month_req    = snap.get("cp_month_req",  0)
 
                 if cp_plan == "free":
-                    # barra: completions este mes / 2000 (lo que realmente se loguea)
+                    # barra: completions este mes / 2000 (límite mensual del plan free)
                     free_limit = COPILOT_PLANES["free"].get("completions_mes", 2000)
                     pct = min(month_req / free_limit, 1.0) if free_limit > 0 else 0
-                elif cp_plan == "pro":
-                    credits = COPILOT_PLANES["pro"]["ai_credits_mes"]
-                    pct = min(month_cost / credits, 1.0) if credits > 0 else 0
-                elif cp_plan == "pro_plus":
-                    credits = COPILOT_PLANES["pro_plus"]["ai_credits_mes"]
-                    pct = min(month_cost / credits, 1.0) if credits > 0 else 0
                 else:
-                    # business/enterprise/unknown: logarítmica sobre costo diario
-                    import math
-                    today_cost = snap.get("cp_today_cost", 0)
-                    pct = min(math.log10(1 + today_cost) / math.log10(6), 1.0)
+                    # pro / pro+ / business / enterprise: req vs referencia configurable
+                    req_ref = self.runtime_cfg.get("copilot_req_ref", 500)
+                    pct = min(month_req / req_ref, 1.0) if req_ref > 0 else 0
 
                 w = self.cv_cp.winfo_width() or (WINDOW_W - 24)
                 make_bar(self.cv_cp, w, 8, pct, COPILOT_C)
