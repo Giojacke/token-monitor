@@ -55,6 +55,8 @@ def _load_runtime_cfg(budget_arg: float) -> dict:
                 cfg["show_gemini"] = bool(raw["show_gemini"])
             if "show_copilot" in raw:
                 cfg["show_copilot"] = bool(raw["show_copilot"])
+            if "copilot_plan" in raw:
+                cfg["copilot_plan"] = raw["copilot_plan"]
             if "language" in raw:
                 cfg["language"] = raw["language"]
             if "start_minimized" in raw:

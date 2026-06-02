@@ -7,7 +7,7 @@ from .config import (
     CLAUDE_C, SESS_BAR, WEEK_BAR, CODEX_C, GEMINI_C, COPILOT_C, DIM, TEXT, WHITE,
     REFRESH_MS, LOG_LINES,
     WINDOW_W, WINDOW_H_EXPANDED, WINDOW_H_COLLAPSED,
-    CLAUDE_PRO_WEEKLY_LIMIT, CLAUDE_SESSION_WINDOW_H,
+    CLAUDE_PRO_WEEKLY_LIMIT, CLAUDE_SESSION_WINDOW_H, COPILOT_PLANES,
 )
 from .state import TokenState
 from .settings_ui import SettingsWindow
@@ -195,6 +195,11 @@ class TokenMonitorApp:
             if self._show_cp:
                 self._cp_frame = tk.Frame(self._body, bg=BG)
                 self._add_provider_block(self._cp_frame, "COPILOT", COPILOT_C, "cp")
+                # Nota extra: aporte individual en plan empresarial
+                self.lbl_cp_enterprise_note = tk.Label(
+                    self._cp_frame, text="", bg=BG, fg=DIM,
+                    font=self.f_mono_sm, justify="left")
+                self.lbl_cp_enterprise_note.pack(anchor="w", pady=(0, 2))
 
             # Stats y log siempre visibles — anclan el orden de pack con before=
             self._sep_stats = tk.Frame(self._body, bg=BORDER, height=1)
@@ -738,25 +743,53 @@ class TokenMonitorApp:
                         getattr(self, f"lbl_gm_{period}_tok").config(text=fmt_tok(tok))
                         getattr(self, f"lbl_gm_{period}_cost").config(text=fmt_cost(cost))
 
-            # ── Copilot: título con modelo detectado ──────────────────────────
+            # ── Copilot: título + barra según plan ───────────────────────────
             if self._show_cp and hasattr(self, "lbl_cp_title"):
+                cp_plan  = self.runtime_cfg.get("copilot_plan", "unknown")
                 cp_model = snap.get("cp_last_model", "")
                 cp_short = cp_model if cp_model else t("unknown")
+                plan_info = COPILOT_PLANES.get(cp_plan, {})
+                plan_label = plan_info.get("label", t("github_enterprise"))
                 self.lbl_cp_title.config(
-                    text=f"◆ COPILOT  — {cp_short}  [{t('github_enterprise')}]")
+                    text=f"◆ COPILOT  — {cp_short}  [{plan_label}]")
 
-            # ── Copilot provider block ────────────────────────────────────────
             if self._show_cp and hasattr(self, "cv_cp"):
-                today_cost = snap.get("cp_today_cost", 0)
-                pct = min(today_cost / budget, 1.0) if budget > 0 else 0
-                w   = self.cv_cp.winfo_width() or (WINDOW_W - 24)
+                cp_plan      = self.runtime_cfg.get("copilot_plan", "unknown")
+                month_cost   = snap.get("cp_month_cost", 0)
+                month_req    = snap.get("cp_month_req",  0)
+
+                if cp_plan == "free":
+                    # barra: requests este mes / 50 (límite free)
+                    free_limit = COPILOT_PLANES["free"]["chat_requests_mes"]
+                    pct = min(month_req / free_limit, 1.0) if free_limit > 0 else 0
+                elif cp_plan == "pro":
+                    credits = COPILOT_PLANES["pro"]["ai_credits_mes"]
+                    pct = min(month_cost / credits, 1.0) if credits > 0 else 0
+                elif cp_plan == "pro_plus":
+                    credits = COPILOT_PLANES["pro_plus"]["ai_credits_mes"]
+                    pct = min(month_cost / credits, 1.0) if credits > 0 else 0
+                else:
+                    # business/enterprise/unknown: logarítmica sobre costo diario
+                    import math
+                    today_cost = snap.get("cp_today_cost", 0)
+                    pct = min(math.log10(1 + today_cost) / math.log10(6), 1.0)
+
+                w = self.cv_cp.winfo_width() or (WINDOW_W - 24)
                 make_bar(self.cv_cp, w, 8, pct, COPILOT_C)
+
                 for _, period in COL_PERIODS:
                     tok  = snap.get(f"cp_{period}_tok", 0)
                     cost = snap.get(f"cp_{period}_cost", 0)
                     if hasattr(self, f"lbl_cp_{period}_tok"):
                         getattr(self, f"lbl_cp_{period}_tok").config(text=fmt_tok(tok))
                         getattr(self, f"lbl_cp_{period}_cost").config(text=fmt_cost(cost))
+
+                # nota empresarial
+                if hasattr(self, "lbl_cp_enterprise_note"):
+                    if cp_plan in ("business", "enterprise"):
+                        self.lbl_cp_enterprise_note.config(text=t("copilot_enterprise_note"))
+                    else:
+                        self.lbl_cp_enterprise_note.config(text="")
 
             # ── stats totales ─────────────────────────────────────────────────
             if hasattr(self, "lbl_total_cost"):

@@ -9,8 +9,8 @@ from tkinter import font as tkfont
 
 from .config import (
     BG, BG2, BG3, BORDER,
-    CLAUDE_C, SESS_BAR, WEEK_BAR, DIM, TEXT, WHITE,
-    CLAUDE_PRO_WEEKLY_LIMIT,
+    CLAUDE_C, SESS_BAR, WEEK_BAR, COPILOT_C, DIM, TEXT, WHITE,
+    CLAUDE_PRO_WEEKLY_LIMIT, COPILOT_PLANES,
 )
 from .detector import CONFIG_PATH
 from .i18n import t, set_lang, get_lang
@@ -110,7 +110,33 @@ class SettingsWindow:
 
         tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(10, 6))
 
-        # ── Sección 0b: Idioma ────────────────────────────────────────────────
+        # ── Sección 0b: Plan GitHub Copilot ───────────────────────────────────
+        tk.Label(body, text=t("copilot_plan_title"),
+                 bg=BG, fg=COPILOT_C, font=f_hd).pack(anchor="w")
+        tk.Label(body, text=t("copilot_plan_hint"),
+                 bg=BG, fg=DIM, font=f_sm, justify="left").pack(anchor="w", pady=(2, 4))
+
+        self.var_copilot_plan = tk.StringVar(
+            value=self.runtime_cfg.get("copilot_plan", "unknown"))
+
+        plan_f = tk.Frame(body, bg=BG)
+        plan_f.pack(anchor="w", pady=(0, 2))
+        for plan_key, plan_data in COPILOT_PLANES.items():
+            tk.Radiobutton(
+                plan_f, text=plan_data["label"],
+                variable=self.var_copilot_plan, value=plan_key,
+                bg=BG, fg=TEXT, selectcolor=BG3, activebackground=BG,
+                font=f_sm, command=self._save_copilot_plan,
+            ).pack(side="left", padx=(0, 10))
+
+        self.lbl_plan_note = tk.Label(
+            body, text="", bg=BG, fg=DIM, font=f_sm, justify="left", wraplength=280)
+        self.lbl_plan_note.pack(anchor="w", pady=(0, 2))
+        self._update_plan_note()
+
+        tk.Frame(body, bg=BORDER, height=1).pack(fill="x", pady=(8, 6))
+
+        # ── Sección 0c: Idioma ────────────────────────────────────────────────
         tk.Label(body, text=t("language"),
                  bg=BG, fg=DIM, font=f_hd).pack(anchor="w")
 
@@ -234,6 +260,33 @@ class SettingsWindow:
         else:
             if not self._scrollbar.winfo_ismapped():
                 self._scrollbar.grid(row=0, column=1, sticky="ns")
+
+    # ── plan copilot ─────────────────────────────────────────────────────────
+
+    def _save_copilot_plan(self) -> None:
+        plan = self.var_copilot_plan.get()
+        self.runtime_cfg["copilot_plan"] = plan
+        self._persist()
+        self.on_save(self.runtime_cfg)
+        self._update_plan_note()
+        self.lbl_status.config(text=t("saved") + " ✓", fg=COPILOT_C)
+
+    def _update_plan_note(self) -> None:
+        plan = self.var_copilot_plan.get()
+        info = COPILOT_PLANES.get(plan, {})
+        if plan == "free":
+            note = t("copilot_plan_note_free").format(
+                chat=info.get("chat_requests_mes", 50),
+                completions=info.get("completions_mes", 2000))
+        elif plan in ("pro", "pro_plus"):
+            note = t("copilot_plan_note_pro").format(
+                credits=info.get("ai_credits_mes", 10))
+        elif plan in ("business", "enterprise"):
+            note = t("copilot_plan_note_enterprise")
+        else:
+            note = t("copilot_plan_note_unknown")
+        if hasattr(self, "lbl_plan_note"):
+            self.lbl_plan_note.config(text=note)
 
     # ── idioma ────────────────────────────────────────────────────────────────
 
@@ -389,6 +442,7 @@ class SettingsWindow:
                 "show_codex":           self.runtime_cfg.get("show_codex",    True),
                 "show_gemini":          self.runtime_cfg.get("show_gemini",   True),
                 "show_copilot":         self.runtime_cfg.get("show_copilot",  True),
+                "copilot_plan":         self.runtime_cfg.get("copilot_plan", "unknown"),
                 "language":             self.runtime_cfg.get("language", "es"),
             })
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

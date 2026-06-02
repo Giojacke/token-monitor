@@ -1,7 +1,8 @@
 """
 Scanner de GitHub Copilot — lee JSON/JSONL de:
   Windows:
-    %APPDATA%\\GitHub Copilot\\
+    %APPDATA%\\GitHub Copilot\\          (Roaming)
+    %LOCALAPPDATA%\\GitHub Copilot\\     (Local)
     %APPDATA%\\Code\\User\\globalStorage\\github.copilot-chat\\
   Mac:
     ~/Library/Application Support/GitHub Copilot/
@@ -30,33 +31,50 @@ from .state import TokenState, PERIODS
 def find_copilot_dirs() -> list[Path]:
     """
     Retorna los directorios donde GitHub Copilot escribe logs.
-    Soporta Windows, Mac y Linux. Filtra los que existen.
+    Soporta Windows, Mac y Linux. Imprime diagnóstico en stdout.
     """
-    dirs: list[Path] = []
+    candidates: list[Path] = []
     home = Path.home()
 
-    # Windows
+    # Windows — Roaming AppData
     appdata = os.environ.get("APPDATA")
     if appdata:
-        dirs += [
+        candidates += [
             Path(appdata) / "GitHub Copilot",
             Path(appdata) / "Code" / "User" / "globalStorage" / "github.copilot-chat",
         ]
 
+    # Windows — Local AppData (la extensión VS Code puede escribir aquí)
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        candidates += [
+            Path(localappdata) / "GitHub Copilot",
+            Path(localappdata) / "Programs" / "GitHub Copilot",
+        ]
+
     # Mac
-    dirs += [
+    candidates += [
         home / "Library" / "Application Support" / "GitHub Copilot",
         home / "Library" / "Application Support" / "Code" / "User" / "globalStorage" / "github.copilot-chat",
     ]
 
     # Linux
     xdg = os.environ.get("XDG_CONFIG_HOME", str(home / ".config"))
-    dirs += [
+    candidates += [
         Path(xdg) / "github-copilot",
         home / ".config" / "Code" / "User" / "globalStorage" / "github.copilot-chat",
     ]
 
-    return [d for d in dirs if d.exists()]
+    found: list[Path] = []
+    for d in candidates:
+        exists = d.exists()
+        print(f"[copilot] buscando en: {d}  →  {'OK' if exists else 'no existe'}")
+        if exists:
+            found.append(d)
+
+    if not found:
+        print("[copilot] ningún directorio encontrado — Copilot no instalado o ruta desconocida")
+    return found
 
 
 def find_copilot_log_files(dirs: list[Path] | None = None) -> list[Path]:
@@ -90,9 +108,10 @@ class CopilotScanner:
     """
 
     def __init__(self, state: TokenState, stop_event: threading.Event):
-        self.state   = state
-        self._stop   = stop_event
+        self.state        = state
+        self._stop        = stop_event
         self._cache: dict = {}
+        self._logged_files = False   # imprime lista de archivos solo en el primer ciclo
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
@@ -108,6 +127,9 @@ class CopilotScanner:
 
     def _scan(self) -> None:
         all_files = find_copilot_log_files()
+        if not self._logged_files:
+            self._logged_files = True
+            print(f"[copilot] archivos encontrados: {[str(f) for f in all_files] or 'ninguno'}")
         if not all_files:
             return
 

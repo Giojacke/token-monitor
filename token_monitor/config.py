@@ -87,6 +87,44 @@ COPILOT_MODELS_PRICES: dict[str, dict[str, float]] = {
     "default":              {"in": 2.50,  "cached": 0.500, "out": 10.00},
 }
 
+# ─── Planes de GitHub Copilot ─────────────────────────────────────────────────
+# Fuente: github.com/features/copilot/plans (junio 2026)
+# ai_credits_mes: presupuesto mensual en USD para modelos premium
+# precio_seat: precio por usuario/mes para planes empresariales
+
+COPILOT_PLANES: dict[str, dict] = {
+    "free": {
+        "chat_requests_mes": 50,
+        "completions_mes":   2000,
+        "modelos":           ["claude-haiku-3-5", "gpt-4o-mini"],
+        "label":             "Free",
+    },
+    "pro": {
+        "ai_credits_mes":    10.00,
+        "completions":       "unlimited",
+        "modelos":           ["gpt-4.1", "claude-sonnet-4-6", "o3"],
+        "label":             "Pro",
+    },
+    "pro_plus": {
+        "ai_credits_mes":    39.00,
+        "completions":       "unlimited",
+        "modelos":           ["claude-opus-4-6", "gpt-5.4", "o3"],
+        "label":             "Pro+",
+    },
+    "business": {
+        "precio_seat":       19.00,
+        "completions":       "unlimited",
+        "modelos":           [],          # varía por configuración del admin
+        "label":             "Business",
+    },
+    "enterprise": {
+        "precio_seat":       39.00,
+        "completions":       "unlimited",
+        "modelos":           [],
+        "label":             "Enterprise",
+    },
+}
+
 # Conservados para compatibilidad con código legacy
 CODEX_PRICE_IN       = 1.10  / 1_000_000
 CODEX_PRICE_CACHED   = 0.275 / 1_000_000
