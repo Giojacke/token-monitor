@@ -67,6 +67,26 @@ GEMINI_MODELS_PRICES: dict[str, dict[str, float]] = {
     "default":                {"in": 1.25,  "cached": 0.310, "out": 10.00},
 }
 
+# ─── Precios por modelo GitHub Copilot (USD / millón de tokens) ──────────────
+# Copilot expone modelos de OpenAI y Anthropic. Los precios son los de la API
+# pública equivalente (el costo real para el usuario es la suscripción mensual).
+
+COPILOT_MODELS_PRICES: dict[str, dict[str, float]] = {
+    # OpenAI
+    "gpt-5.1":              {"in": 0.25,  "cached": 0.025, "out":  2.00},
+    "gpt-5.1-codex-mini":   {"in": 0.25,  "cached": 0.025, "out":  2.00},
+    "gpt-5.3-codex":        {"in": 1.75,  "cached": 0.175, "out": 14.00},
+    "gpt-4o":               {"in": 2.50,  "cached": 1.250, "out": 10.00},
+    "gpt-4o-mini":          {"in": 0.15,  "cached": 0.075, "out":  0.60},
+    "gpt-4.1":              {"in": 2.00,  "cached": 0.500, "out":  8.00},
+    # Anthropic (via Copilot — nombres con punto)
+    "claude-sonnet-4.5":    {"in": 3.00,  "cached": 0.300, "out": 15.00},
+    "claude-sonnet-4-5":    {"in": 3.00,  "cached": 0.300, "out": 15.00},
+    "claude-haiku-3.5":     {"in": 0.80,  "cached": 0.080, "out":  4.00},
+    "claude-haiku-3-5":     {"in": 0.80,  "cached": 0.080, "out":  4.00},
+    "default":              {"in": 2.50,  "cached": 0.500, "out": 10.00},
+}
+
 # Conservados para compatibilidad con código legacy
 CODEX_PRICE_IN       = 1.10  / 1_000_000
 CODEX_PRICE_CACHED   = 0.275 / 1_000_000
@@ -95,6 +115,7 @@ SESS_BAR  = "#f59e0b"   # ámbar   — barra sesión actual (igual que la web)
 WEEK_BAR  = "#3b82f6"   # azul    — barra semanal (igual que la web)
 CODEX_C   = "#34d399"   # verde   — Codex CLI
 GEMINI_C  = "#4285f4"   # azul Google — Gemini CLI
+COPILOT_C = "#6e40c9"  # morado GitHub — GitHub Copilot
 DIM       = "#555555"
 TEXT      = "#cccccc"
 WHITE     = "#e8e8e8"

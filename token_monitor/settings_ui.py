@@ -95,13 +95,15 @@ class SettingsWindow:
         tk.Label(body, text=t("providers_hint"),
                  bg=BG, fg=DIM, font=f_sm, justify="left").pack(anchor="w", pady=(2, 4))
 
-        self.var_show_claude = tk.BooleanVar(value=self.runtime_cfg.get("show_claude", True))
-        self.var_show_codex  = tk.BooleanVar(value=self.runtime_cfg.get("show_codex",  True))
-        self.var_show_gemini = tk.BooleanVar(value=self.runtime_cfg.get("show_gemini", True))
+        self.var_show_claude  = tk.BooleanVar(value=self.runtime_cfg.get("show_claude",  True))
+        self.var_show_codex   = tk.BooleanVar(value=self.runtime_cfg.get("show_codex",   True))
+        self.var_show_gemini  = tk.BooleanVar(value=self.runtime_cfg.get("show_gemini",  True))
+        self.var_show_copilot = tk.BooleanVar(value=self.runtime_cfg.get("show_copilot", True))
 
-        for var, key in [(self.var_show_claude, "claude_code"),
-                         (self.var_show_codex,  "codex_cli"),
-                         (self.var_show_gemini, "gemini_cli")]:
+        for var, key in [(self.var_show_claude,  "claude_code"),
+                         (self.var_show_codex,   "codex_cli"),
+                         (self.var_show_gemini,  "gemini_cli"),
+                         (self.var_show_copilot, "copilot_cli")]:
             tk.Checkbutton(body, text=t(key), variable=var,
                            bg=BG, fg=TEXT, selectcolor=BG3, activebackground=BG,
                            font=f_sm, command=self._save_providers).pack(anchor="w")
@@ -246,9 +248,10 @@ class SettingsWindow:
     # ── proveedores ───────────────────────────────────────────────────────────
 
     def _save_providers(self) -> None:
-        self.runtime_cfg["show_claude"] = self.var_show_claude.get()
-        self.runtime_cfg["show_codex"]  = self.var_show_codex.get()
-        self.runtime_cfg["show_gemini"] = self.var_show_gemini.get()
+        self.runtime_cfg["show_claude"]  = self.var_show_claude.get()
+        self.runtime_cfg["show_codex"]   = self.var_show_codex.get()
+        self.runtime_cfg["show_gemini"]  = self.var_show_gemini.get()
+        self.runtime_cfg["show_copilot"] = self.var_show_copilot.get()
         self._persist()
         self.on_save(self.runtime_cfg)
         self.lbl_status.config(text=t("visibility"), fg=CLAUDE_C)
@@ -382,9 +385,10 @@ class SettingsWindow:
                 "sess_reset_min":       self.runtime_cfg.get("sess_reset_min", 0),
                 "calibration_time":     self.runtime_cfg.get("calibration_time", ""),
                 "calibration_factor":   self.runtime_cfg.get("calibration_factor", 1.0),
-                "show_claude":          self.runtime_cfg.get("show_claude",  True),
-                "show_codex":           self.runtime_cfg.get("show_codex",   True),
-                "show_gemini":          self.runtime_cfg.get("show_gemini",  True),
+                "show_claude":          self.runtime_cfg.get("show_claude",   True),
+                "show_codex":           self.runtime_cfg.get("show_codex",    True),
+                "show_gemini":          self.runtime_cfg.get("show_gemini",   True),
+                "show_copilot":         self.runtime_cfg.get("show_copilot",  True),
                 "language":             self.runtime_cfg.get("language", "es"),
             })
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)

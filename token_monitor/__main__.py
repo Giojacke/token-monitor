@@ -16,6 +16,7 @@ from .codex_scanner import CodexScanner
 from .codex_status import CodexStatusPoller
 from .wrapper import create_wrapper_scripts, WrapperScanner, wrapper_log_has_data, CODEX_LOG
 from .gemini_scanner import GeminiScanner
+from .copilot_scanner import CopilotScanner
 from .log_writer import DailyLogger
 from .i18n import set_lang
 from .state import TokenState
@@ -52,6 +53,8 @@ def _load_runtime_cfg(budget_arg: float) -> dict:
                 cfg["show_codex"]  = bool(raw["show_codex"])
             if "show_gemini" in raw:
                 cfg["show_gemini"] = bool(raw["show_gemini"])
+            if "show_copilot" in raw:
+                cfg["show_copilot"] = bool(raw["show_copilot"])
             if "language" in raw:
                 cfg["language"] = raw["language"]
             if "start_minimized" in raw:
@@ -150,6 +153,12 @@ def main() -> None:
             GeminiScanner(state, stop_ev).start()
             watching.append("gemini")
             print("[token-monitor] Gemini  -> watching ~/.gemini/tmp/<user>/chats/")
+
+        # GitHub Copilot — escanea directorios de logs de la extensión VS Code
+        if detection.show_copilot:
+            CopilotScanner(state, stop_ev).start()
+            watching.append("copilot")
+            print(f"[token-monitor] Copilot -> watching {detection.copilot_log_path}")
 
         if watching:
             # Construir footer según estado del wrapper

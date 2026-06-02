@@ -91,6 +91,20 @@ class DailyLogger:
                 f"{gm_cost:.6f}",
             ])
 
+        # ── Copilot ────────────────────────────────────────────────────────────
+        cp_req  = snap.get("cp_today_req",  0)
+        if cp_req > 0:
+            cp_in     = snap.get("cp_today_in",     0)
+            cp_out    = snap.get("cp_today_out",    0)
+            cp_cached = snap.get("cp_today_cached", 0)
+            cp_cost   = snap.get("cp_today_cost",   0.0)
+            cp_mod    = snap.get("cp_last_model",   "unknown")
+            rows.append([
+                "copilot", cp_mod, today_str,
+                cp_in, cp_out, cp_cached, cp_req,
+                f"{cp_cost:.6f}",
+            ])
+
         if not rows:
             return
 

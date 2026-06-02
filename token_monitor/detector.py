@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .config import PROJECTS_DIR, CODEX_SESSIONS_DIR
 from .gemini_scanner import find_gemini_chats_dir
+from .copilot_scanner import find_copilot_dirs, find_copilot_log_files
 
 CONFIG_PATH = Path.home() / ".config" / "token-monitor" / "config.json"
 CACHE_TTL_H = 24   # horas antes de repetir la detección
@@ -43,18 +44,25 @@ class Detection:
     gemini_bin:       str   = ""
     gemini_has_logs:  bool  = False
 
+    # GitHub Copilot (extensión VS Code — sin binario propio)
+    copilot_installed: bool = False
+    copilot_has_logs:  bool = False
+    copilot_log_path:  str  = ""
+
     # Metadato
     detected_at: str = ""
 
     @property
     def any_installed(self) -> bool:
-        return self.claude_installed or self.codex_installed or self.gemini_installed
+        return (self.claude_installed or self.codex_installed
+                or self.gemini_installed or self.copilot_installed)
 
     @property
     def tools(self) -> list[str]:
-        return (["claude"] if self.claude_installed else []) + \
-               (["codex"]  if self.codex_installed  else []) + \
-               (["gemini"] if self.gemini_installed else [])
+        return (["claude"]  if self.claude_installed  else []) + \
+               (["codex"]   if self.codex_installed   else []) + \
+               (["gemini"]  if self.gemini_installed  else []) + \
+               (["copilot"] if self.copilot_installed else [])
 
     @property
     def show_claude(self) -> bool:
@@ -67,6 +75,10 @@ class Detection:
     @property
     def show_gemini(self) -> bool:
         return self.gemini_installed
+
+    @property
+    def show_copilot(self) -> bool:
+        return self.copilot_installed
 
 
 # ── detección ─────────────────────────────────────────────────────────────────
@@ -100,6 +112,14 @@ def detect() -> Detection:
     chats_dir = find_gemini_chats_dir()
     if chats_dir is not None:
         d.gemini_has_logs = next(chats_dir.glob("session-*.jsonl"), None) is not None
+
+    # ── GitHub Copilot ──
+    copilot_dirs = find_copilot_dirs()
+    d.copilot_installed = bool(copilot_dirs)
+    if copilot_dirs:
+        d.copilot_log_path = str(copilot_dirs[0])
+        log_files = find_copilot_log_files(copilot_dirs)
+        d.copilot_has_logs = bool(log_files)
 
     return d
 
@@ -183,6 +203,15 @@ def print_detection(d: Detection) -> None:
             lines.append("       logs: ninguno encontrado")
     else:
         lines.append("  [--] Gemini CLI   -> no instalado")
+
+    if d.copilot_installed:
+        lines.append(f"  [OK] GitHub Copilot -> {d.copilot_log_path}")
+        if d.copilot_has_logs:
+            lines.append("       logs: encontrados")
+        else:
+            lines.append("       logs: ninguno encontrado")
+    else:
+        lines.append("  [--] GitHub Copilot -> no detectado")
 
     if not d.any_installed:
         lines.append("  [!!] Ninguna herramienta detectada")

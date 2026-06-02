@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 from .config import (
     BG, BG2, BG3, BORDER,
-    CLAUDE_C, SESS_BAR, WEEK_BAR, CODEX_C, GEMINI_C, DIM, TEXT, WHITE,
+    CLAUDE_C, SESS_BAR, WEEK_BAR, CODEX_C, GEMINI_C, COPILOT_C, DIM, TEXT, WHITE,
     REFRESH_MS, LOG_LINES,
     WINDOW_W, WINDOW_H_EXPANDED, WINDOW_H_COLLAPSED,
     CLAUDE_PRO_WEEKLY_LIMIT, CLAUDE_SESSION_WINDOW_H,
@@ -109,10 +109,11 @@ class TokenMonitorApp:
             "daily_budget": daily_budget,
         }
 
-        # Qué bloques mostrar (default False para Gemini si no hay detección)
-        self._show_cl = (detection.show_claude  if detection else True)
-        self._show_cx = (detection.show_codex   if detection else True)
-        self._show_gm = (detection.show_gemini  if detection else False)
+        # Qué bloques mostrar (default False para Gemini/Copilot si no hay detección)
+        self._show_cl = (detection.show_claude   if detection else True)
+        self._show_cx = (detection.show_codex    if detection else True)
+        self._show_gm = (detection.show_gemini   if detection else False)
+        self._show_cp = (detection.show_copilot  if detection else False)
 
         root.overrideredirect(True)
         root.attributes("-topmost", True)
@@ -169,7 +170,7 @@ class TokenMonitorApp:
         self._scroll_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
         # ── Contenido ─────────────────────────────────────────────────────────
-        if not (self._show_cl or self._show_cx or self._show_gm):
+        if not (self._show_cl or self._show_cx or self._show_gm or self._show_cp):
             self._build_no_tools_msg(self._body)
         else:
             # Frames por proveedor — se muestran/ocultan con _apply_visibility()
@@ -188,6 +189,12 @@ class TokenMonitorApp:
             if self._show_gm:
                 self._gm_frame = tk.Frame(self._body, bg=BG)
                 self._add_provider_block(self._gm_frame, "GEMINI CLI", GEMINI_C, "gm")
+
+            self._sep_gm_cp = tk.Frame(self._body, bg=BORDER, height=1)
+
+            if self._show_cp:
+                self._cp_frame = tk.Frame(self._body, bg=BG)
+                self._add_provider_block(self._cp_frame, "COPILOT", COPILOT_C, "cp")
 
             # Stats y log siempre visibles — anclan el orden de pack con before=
             self._sep_stats = tk.Frame(self._body, bg=BORDER, height=1)
@@ -402,14 +409,14 @@ class TokenMonitorApp:
         tk.Label(col0, text="$",   bg=BG, fg=DIM, font=self.f_mono_sm,
                  width=4, anchor="w").pack()
 
-        # Columnas de períodos
-        for key, period in COL_PERIODS:
+        # Columnas de períodos (col_key = i18n key, period = snapshot key)
+        for col_key, period in COL_PERIODS:
             col = tk.Frame(table, bg=BG)
             col.pack(side="left", expand=True, fill="x")
-            hdr = tk.Label(col, text=t(key), bg=BG, fg=DIM,
+            hdr = tk.Label(col, text=t(col_key), bg=BG, fg=DIM,
                            font=self.f_mono_sm, width=COL_W, anchor="e")
             hdr.pack()
-            self._translatable.append((hdr, key))
+            self._translatable.append((hdr, col_key))
 
             lbl_tok  = tk.Label(col, text="0", bg=BG, fg=color,
                                 font=self.f_mono_sm, width=COL_W, anchor="e")
@@ -498,13 +505,14 @@ class TokenMonitorApp:
         """Muestra u oculta bloques de proveedor según runtime_cfg."""
         if not hasattr(self, "_sep_stats"):
             return
-        show_cl = self._show_cl and self.runtime_cfg.get("show_claude", True)
-        show_cx = self._show_cx and self.runtime_cfg.get("show_codex",  True)
-        show_gm = self._show_gm and self.runtime_cfg.get("show_gemini", True)
+        show_cl = self._show_cl and self.runtime_cfg.get("show_claude",  True)
+        show_cx = self._show_cx and self.runtime_cfg.get("show_codex",   True)
+        show_gm = self._show_gm and self.runtime_cfg.get("show_gemini",  True)
+        show_cp = self._show_cp and self.runtime_cfg.get("show_copilot", True)
 
         # Reset: quita todos del layout
         for attr in ("_claude_frame", "_sep_cl_cx", "_codex_frame",
-                     "_sep_cx_gm", "_gm_frame"):
+                     "_sep_cx_gm", "_gm_frame", "_sep_gm_cp", "_cp_frame"):
             if hasattr(self, attr):
                 getattr(self, attr).pack_forget()
 
@@ -512,17 +520,23 @@ class TokenMonitorApp:
         if show_cl and hasattr(self, "_claude_frame"):
             self._claude_frame.pack(fill="x", pady=2, before=self._sep_stats)
 
-        if show_cl and (show_cx or show_gm) and hasattr(self, "_sep_cl_cx"):
+        if show_cl and (show_cx or show_gm or show_cp) and hasattr(self, "_sep_cl_cx"):
             self._sep_cl_cx.pack(fill="x", pady=5, before=self._sep_stats)
 
         if show_cx and hasattr(self, "_codex_frame"):
             self._codex_frame.pack(fill="x", pady=2, before=self._sep_stats)
 
-        if show_cx and show_gm and hasattr(self, "_sep_cx_gm"):
+        if show_cx and (show_gm or show_cp) and hasattr(self, "_sep_cx_gm"):
             self._sep_cx_gm.pack(fill="x", pady=5, before=self._sep_stats)
 
         if show_gm and hasattr(self, "_gm_frame"):
             self._gm_frame.pack(fill="x", pady=2, before=self._sep_stats)
+
+        if show_gm and show_cp and hasattr(self, "_sep_gm_cp"):
+            self._sep_gm_cp.pack(fill="x", pady=5, before=self._sep_stats)
+
+        if show_cp and hasattr(self, "_cp_frame"):
+            self._cp_frame.pack(fill="x", pady=2, before=self._sep_stats)
 
     # ── scroll helpers ────────────────────────────────────────────────────────
 
@@ -724,6 +738,26 @@ class TokenMonitorApp:
                         getattr(self, f"lbl_gm_{period}_tok").config(text=fmt_tok(tok))
                         getattr(self, f"lbl_gm_{period}_cost").config(text=fmt_cost(cost))
 
+            # ── Copilot: título con modelo detectado ──────────────────────────
+            if self._show_cp and hasattr(self, "lbl_cp_title"):
+                cp_model = snap.get("cp_last_model", "")
+                cp_short = cp_model if cp_model else t("unknown")
+                self.lbl_cp_title.config(
+                    text=f"◆ COPILOT  — {cp_short}  [{t('github_enterprise')}]")
+
+            # ── Copilot provider block ────────────────────────────────────────
+            if self._show_cp and hasattr(self, "cv_cp"):
+                today_cost = snap.get("cp_today_cost", 0)
+                pct = min(today_cost / budget, 1.0) if budget > 0 else 0
+                w   = self.cv_cp.winfo_width() or (WINDOW_W - 24)
+                make_bar(self.cv_cp, w, 8, pct, COPILOT_C)
+                for _, period in COL_PERIODS:
+                    tok  = snap.get(f"cp_{period}_tok", 0)
+                    cost = snap.get(f"cp_{period}_cost", 0)
+                    if hasattr(self, f"lbl_cp_{period}_tok"):
+                        getattr(self, f"lbl_cp_{period}_tok").config(text=fmt_tok(tok))
+                        getattr(self, f"lbl_cp_{period}_cost").config(text=fmt_cost(cost))
+
             # ── stats totales ─────────────────────────────────────────────────
             if hasattr(self, "lbl_total_cost"):
                 self.lbl_total_cost.config(text=fmt_cost(snap.get("total_today_cost", 0)))
@@ -740,12 +774,15 @@ class TokenMonitorApp:
                         tag = "cx"
                     elif "[gm]" in line:
                         tag = "gm"
+                    elif "[cp]" in line:
+                        tag = "cp"
                     else:
                         tag = "cl"
                     self.log_text.insert("end", line + "\n", tag)
                 self.log_text.tag_config("cl", foreground=CLAUDE_C)
                 self.log_text.tag_config("cx", foreground=CODEX_C)
                 self.log_text.tag_config("gm", foreground=GEMINI_C)
+                self.log_text.tag_config("cp", foreground=COPILOT_C)
                 self.log_text.config(state="disabled")
 
         self.root.after(REFRESH_MS, self._tick)

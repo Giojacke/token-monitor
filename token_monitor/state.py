@@ -17,6 +17,10 @@ def _zero_gm() -> dict:
     return {p: {"in": 0, "out": 0, "cached": 0, "req": 0, "cost": 0.0} for p in PERIODS}
 
 
+def _zero_cp() -> dict:
+    return {p: {"in": 0, "out": 0, "cached": 0, "req": 0, "cost": 0.0} for p in PERIODS}
+
+
 class TokenState:
     """
     Estado compartido entre los scanners (writers) y la UI (reader).
@@ -30,12 +34,15 @@ class TokenState:
         self.cl             = _zero_cl()
         self.cx             = _zero_cx()
         self.gm             = _zero_gm()
+        self.cp             = _zero_cp()
         self.cl_log: list[str] = []
         self.cx_log: list[str] = []
         self.gm_log: list[str] = []
+        self.cp_log: list[str] = []
         self.cl_last_model: str = ""
         self.cx_last_model: str = ""
         self.gm_last_model: str = ""
+        self.cp_last_model: str = ""
 
     # ── escritura ─────────────────────────────────────────────────────────────
 
@@ -72,6 +79,17 @@ class TokenState:
             if last_model:
                 self.gm_last_model = last_model
 
+    def update_copilot(self, data: dict[str, dict], log: list[str],
+                       last_model: str = "") -> None:
+        """data = {period: {in, out, cached, req, cost}} para cada período de Copilot."""
+        with self.lock:
+            for p in PERIODS:
+                if p in data:
+                    self.cp[p] = data[p]
+            self.cp_log = log
+            if last_model:
+                self.cp_last_model = last_model
+
     # ── lectura ───────────────────────────────────────────────────────────────
 
     def snapshot(self) -> dict:
@@ -82,13 +100,16 @@ class TokenState:
                 cl = self.cl[p]
                 cx = self.cx[p]
                 gm = self.gm[p]
+                cp = self.cp[p]
 
                 cl_tok  = cl["in"] + cl["cw"] + cl["cr"] + cl["out"]
                 cx_tok  = cx["in"] + cx["cached"] + cx["out"]
                 gm_tok  = gm["in"] + gm["cached"] + gm["out"]
+                cp_tok  = cp["in"] + cp["cached"] + cp["out"]
                 cl_cost = cl["cost"]
                 cx_cost = cx["cost"]
                 gm_cost = gm["cost"]
+                cp_cost = cp["cost"]
 
                 out[f"cl_{p}_input_tok"] = cl["in"] + cl["cw"] + cl["cr"]
                 out[f"cl_{p}_tok"]  = cl_tok
@@ -111,10 +132,17 @@ class TokenState:
                 out[f"gm_{p}_req"]    = gm["req"]
                 out[f"gm_{p}_cost"]   = gm_cost
 
-                out[f"total_{p}_cost"] = cl_cost + cx_cost + gm_cost
-                out[f"total_{p}_req"]  = cl["req"] + cx["req"] + gm["req"]
+                out[f"cp_{p}_tok"]    = cp_tok
+                out[f"cp_{p}_in"]     = cp["in"]
+                out[f"cp_{p}_out"]    = cp["out"]
+                out[f"cp_{p}_cached"] = cp["cached"]
+                out[f"cp_{p}_req"]    = cp["req"]
+                out[f"cp_{p}_cost"]   = cp_cost
 
-            raw = sorted(self.cl_log + self.cx_log + self.gm_log)
+                out[f"total_{p}_cost"] = cl_cost + cx_cost + gm_cost + cp_cost
+                out[f"total_{p}_req"]  = cl["req"] + cx["req"] + gm["req"] + cp["req"]
+
+            raw = sorted(self.cl_log + self.cx_log + self.gm_log + self.cp_log)
             # Deduplica entradas idénticas consecutivas (Claude escribe la misma
             # línea varias veces en el JSONL antes de completar el stream)
             combined = []
@@ -127,6 +155,7 @@ class TokenState:
             out["cl_last_model"]  = self.cl_last_model
             out["cx_last_model"]  = self.cx_last_model
             out["gm_last_model"]  = self.gm_last_model
+            out["cp_last_model"]  = self.cp_last_model
             return out
 
     def reset(self) -> None:
@@ -135,9 +164,12 @@ class TokenState:
             self.cl             = _zero_cl()
             self.cx             = _zero_cx()
             self.gm             = _zero_gm()
+            self.cp             = _zero_cp()
             self.cl_log         = []
             self.cx_log         = []
             self.gm_log         = []
+            self.cp_log         = []
             self.cl_last_model  = ""
             self.cx_last_model  = ""
             self.gm_last_model  = ""
+            self.cp_last_model  = ""

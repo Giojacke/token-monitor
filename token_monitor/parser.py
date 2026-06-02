@@ -5,6 +5,7 @@ from .config import (
     CLAUDE_MODELS_PRICES,
     CODEX_MODELS_PRICES,
     GEMINI_MODELS_PRICES,
+    COPILOT_MODELS_PRICES,
 )
 
 
@@ -174,6 +175,53 @@ def calc_gemini_cost(inp: int, out: int, cached: int,
 def calc_codex_cost(inp: int, out: int, cached: int,
                     model: str = "default") -> float:
     p = CODEX_MODELS_PRICES.get(model) or CODEX_MODELS_PRICES["default"]
+    M = 1_000_000
+    return (
+        inp    * p["in"]     / M +
+        cached * p["cached"] / M +
+        out    * p["out"]    / M
+    )
+
+
+def parse_copilot_entry(obj: dict, fallback_ts=None):
+    """
+    Parsea un objeto JSON/dict de GitHub Copilot.
+
+    Formatos soportados:
+      {"model": "gpt-5.1", "token_usage": {"input": N, "output": N, "cached": N}, ...}
+      {"model": "claude-sonnet-4.5", "tokens": {"input": N, "output": N}, ...}
+
+    Devuelve (ts_utc, inp, out, cached, model) o None.
+    """
+    if not isinstance(obj, dict):
+        return None
+
+    model = obj.get("model") or "default"
+
+    usage = obj.get("token_usage") or obj.get("tokens") or {}
+    if not isinstance(usage, dict):
+        return None
+
+    inp    = (usage.get("input")          or usage.get("input_tokens")          or 0)
+    out    = (usage.get("output")         or usage.get("output_tokens")         or 0)
+    cached = (usage.get("cached")         or usage.get("cached_tokens")
+              or usage.get("cached_input_tokens")                               or 0)
+
+    if not (inp or out or cached):
+        return None
+
+    ts_raw = (obj.get("timestamp") or obj.get("created_at") or obj.get("time") or "")
+    try:
+        ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+    except Exception:
+        ts = fallback_ts or datetime.now(timezone.utc)
+
+    return ts, inp, out, cached, model
+
+
+def calc_copilot_cost(inp: int, out: int, cached: int,
+                      model: str = "default") -> float:
+    p = COPILOT_MODELS_PRICES.get(model) or COPILOT_MODELS_PRICES["default"]
     M = 1_000_000
     return (
         inp    * p["in"]     / M +

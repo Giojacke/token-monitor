@@ -3,7 +3,7 @@
 
   # Token Monitor
 
-  **Monitor en tiempo real del consumo de tokens de Claude Code, Codex CLI y Gemini CLI**
+  **Monitor en tiempo real del consumo de tokens de Claude Code, Codex CLI, Gemini CLI y GitHub Copilot**
 
   ![version](https://img.shields.io/badge/version-1.0.0-green)
   ![license](https://img.shields.io/badge/license-MIT-green)
@@ -15,7 +15,7 @@
 
 ## ¿Qué es esto?
 
-Una pantalla flotante de escritorio que lee en tiempo real los logs de **Claude Code**, **Codex CLI** y **Gemini CLI** y muestra:
+Una pantalla flotante de escritorio que lee en tiempo real los logs de **Claude Code**, **Codex CLI**, **Gemini CLI** y **GitHub Copilot** y muestra:
 
 - Tokens consumidos por sesión (ventana de 5h) y acumulados por día, semana, mes y año
 - Modelo detectado automáticamente (`claude-sonnet-4-6`, `gpt-5.4`, `gemini-2.5-pro`, etc.)
@@ -85,6 +85,16 @@ Gemini CLI escribe sus chats en `~/.gemini/tmp/<usuario>/chats/session-*.jsonl`.
 
 El JSONL de Gemini usa un patrón de append-update donde la misma entrada puede aparecer múltiples veces. El monitor deduplica por `id` para evitar doble conteo.
 
+### GitHub Copilot
+
+GitHub Copilot (extensión de VS Code) escribe logs en:
+
+- **Windows:** `%APPDATA%\GitHub Copilot\` y `%APPDATA%\Code\User\globalStorage\github.copilot-chat\`
+- **Mac:** `~/Library/Application Support/GitHub Copilot/`
+- **Linux:** `~/.config/github-copilot/`
+
+El monitor lee archivos `.json` y `.jsonl` de esos directorios buscando los campos `model`, `token_usage` (OpenAI) o `tokens` (Anthropic/otros). Los costos mostrados son el **equivalente en API** — el costo real para el usuario es la suscripción mensual de Copilot.
+
 ---
 
 ## Logs diarios
@@ -114,6 +124,7 @@ token_monitor/
 ├── codex_scanner.py   Scanner de JSONL de Codex CLI
 ├── codex_status.py    Poller de `codex /status` para rate-limits en vivo
 ├── gemini_scanner.py  Scanner de JSONL de Gemini CLI
+├── copilot_scanner.py Scanner de JSON/JSONL de GitHub Copilot
 ├── wrapper.py         Generación de scripts wrapper para Codex en tiempo real
 ├── ui.py              Interfaz Tkinter flotante con scroll
 ├── tray.py            Integración system tray
@@ -167,6 +178,18 @@ assets/
 | gemini-2.5-flash | $0.15 | $0.040 | $0.60 |
 | gemini-2.0-flash | $0.10 | $0.025 | $0.40 |
 
+### GitHub Copilot — precios USD por millón de tokens (equiv. API)
+
+| Modelo | Input | Cached | Output |
+|--------|------:|-------:|-------:|
+| gpt-5.1 / gpt-5.1-codex-mini | $0.25 | $0.025 | $2.00 |
+| gpt-5.3-codex | $1.75 | $0.175 | $14.00 |
+| gpt-4o | $2.50 | $1.250 | $10.00 |
+| gpt-4o-mini | $0.15 | $0.075 | $0.60 |
+| gpt-4.1 | $2.00 | $0.500 | $8.00 |
+| claude-sonnet-4.5 | $3.00 | $0.300 | $15.00 |
+| claude-haiku-3.5 | $0.80 | $0.080 | $4.00 |
+
 > Los precios viven en `token_monitor/config.py` como diccionarios. Actualizar un precio = una línea de código.
 
 ---
@@ -196,7 +219,7 @@ Para agregar un idioma nuevo, añade una clave en el dict `TEXTOS` de `token_mon
 ## Roadmap
 
 - [x] Gemini CLI
-- [ ] GitHub Copilot
+- [x] GitHub Copilot
 - [ ] Cursor
 - [ ] Notificaciones de alerta al cruzar umbrales configurables
 - [ ] Exportar historial a CSV *(logs diarios ya disponibles en `~/.token-monitor/logs/`)*
@@ -208,7 +231,7 @@ Para agregar un idioma nuevo, añade una clave en el dict `TEXTOS` de `token_mon
 
 1. Fork del repo
 2. `git checkout -b feature/nueva-ia`
-3. Para agregar un proveedor nuevo, implementa un scanner siguiendo el patrón de `scanner.py`, `codex_scanner.py` o `gemini_scanner.py`
+3. Para agregar un proveedor nuevo, implementa un scanner siguiendo el patrón de `scanner.py`, `codex_scanner.py`, `gemini_scanner.py` o `copilot_scanner.py`
 4. Los precios del modelo nuevo van en `config.py` como dict `{modelo: {in, cached, out}}`
 5. Agrega las claves de traducción necesarias en `i18n.py` (español e inglés)
 6. PR con descripción de qué IA agregaste y cómo detectaste el modelo en sus logs locales
