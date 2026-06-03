@@ -123,7 +123,7 @@ class GeminiScanner:
                 for k in ("in", "out", "cached", "req", "cost"):
                     totals[p][k] += fd[p][k]
 
-        self.state.update_gemini(totals, log[-40:], last_model)
+        self.state.update_gemini(totals, log, last_model)
 
     def _read_file(self, path: Path, starts: dict[str, datetime]) -> dict:
         fd: dict = {

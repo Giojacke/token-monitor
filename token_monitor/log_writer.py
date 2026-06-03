@@ -1,34 +1,71 @@
 """
-DailyLogger — escribe un resumen diario de tokens en ~/.token-monitor/logs/
+DailyLogger — escribe dos archivos en ~/.token-monitor/logs/
 
-Un archivo por día: YYYY-MM-DD.txt
-Formato CSV separado por comas, una fila por proveedor con totales del día.
-Se actualiza cada 60 segundos (overwrite del día actual).
+1. YYYY-MM-DD.csv
+   Resumen diario, una fila por proveedor+modelo.
+   Se sobreescribe cada 60 s con los totales actualizados.
+   Columnas: provider, model, date, tokens_in, tokens_out, requests, cost_usd
 
-Ejemplo de salida (2026-06-02.txt):
-  provider,model,date,tokens_in,tokens_out,tokens_cached,requests,cost_usd
-  claude,sonnet-4-6,2026-06-02,284231,3667,272564,15,0.055005
-  gemini,gemini-3-flash-preview,2026-06-02,55944,502,22626,9,0.000433
+2. YYYY-MM-DD-activity.txt
+   Cada entrada del activity log tal como aparece en la UI, en tiempo real.
+   Modo append — nunca se sobreescribe, crece durante el día.
+   Se actualiza cada 10 s.
+   Ejemplo:
+     [21:25:49] [cx]  gpt-5.4  in=73,244  out=195
+     [21:26:40] [gm]  gemini-3-flash-preview  in=30,106  out=502
+     [21:26:58] [ch]  gpt-4o  req+1
 """
 
 import csv
+import re
 import threading
 import time
+from collections import defaultdict
 from datetime import date
 
 from .config import LOGS_DIR
+from .parser import calc_cost, calc_gemini_cost, calc_codex_cost, calc_copilot_cost
+
+
+# ── parseo de entradas del activity log ───────────────────────────────────────
+#   [HH:MM:SS] [tag]  model  in=N  out=N
+#   [HH:MM:SS] [tag]  model  req+1
+_RE_TOK = re.compile(
+    r"\[\d{2}:\d{2}:\d{2}\] \[(\w+)\]\s+(\S+)\s+in=([\d,]+)\s+out=([\d,]+)"
+)
+_RE_REQ = re.compile(
+    r"\[\d{2}:\d{2}:\d{2}\] \[(\w+)\]\s+(\S+)\s+req\+1"
+)
+
+_TAG_PROVIDER = {
+    "cl": "claude",
+    "cx": "codex",
+    "gm": "gemini",
+    "ch": "copilot",
+    "cp": "copilot",
+}
+
+
+def _cost_for(provider: str, model: str, in_tok: int, out_tok: int) -> float:
+    if provider == "claude":
+        return calc_cost(in_tok, out_tok, 0, 0, model)
+    if provider == "codex":
+        return calc_codex_cost(in_tok, out_tok, 0, model)
+    if provider == "gemini":
+        return calc_gemini_cost(in_tok, out_tok, 0, model)
+    if provider == "copilot":
+        return calc_copilot_cost(in_tok, out_tok, 0, model)
+    return 0.0
 
 
 class DailyLogger:
-    """
-    Lee el snapshot del TokenState cada 60s y sobreescribe el archivo del día
-    con los totales actualizados de cada proveedor.
-    """
-
     def __init__(self, state, stop_event: threading.Event):
-        self.state = state
-        self._stop = stop_event
+        self.state  = state
+        self._stop  = stop_event
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        self._seen: set[str] = set()   # entradas ya escritas en activity.txt
+        self._today: str     = ""
+        self._tick: int      = 0
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self) -> None:
@@ -37,82 +74,75 @@ class DailyLogger:
     def _run(self) -> None:
         while not self._stop.is_set():
             try:
-                self._write()
+                today = date.today().isoformat()
+                if today != self._today:
+                    self._seen  = set()
+                    self._today = today
+                    self._tick  = 0
+
+                self._append_activity(today)
+
+                self._tick += 1
+                if self._tick % 6 == 0:   # cada 60 s
+                    self._write_summary(today)
             except Exception:
                 pass
-            time.sleep(60)
+            time.sleep(10)
 
-    def _write(self) -> None:
-        snap      = self.state.snapshot()
-        today_str = date.today().isoformat()
-        log_file  = LOGS_DIR / f"{today_str}.txt"
+    # ── activity log (append en tiempo real) ──────────────────────────────────
 
-        rows: list[list] = []
+    def _append_activity(self, today: str) -> None:
+        all_entries = self.state.full_activity()
+        new = [e for e in all_entries if e not in self._seen]
+        if not new:
+            return
+        act_file = LOGS_DIR / f"{today}-activity.txt"
+        with open(act_file, "a", encoding="utf-8") as f:
+            for entry in new:
+                f.write(entry + "\n")
+        self._seen.update(new)
 
-        # ── Claude ─────────────────────────────────────────────────────────────
-        cl_req  = snap.get("cl_today_req",  0)
-        if cl_req > 0:
-            cl_in   = snap.get("cl_today_in",   0)
-            cl_out  = snap.get("cl_today_out",  0)
-            cl_cw   = snap.get("cl_today_input_tok", 0) - cl_in   # cache_w + cache_r
-            cl_cost = snap.get("cl_today_cost", 0.0)
-            cl_mod  = snap.get("cl_last_model", "unknown").replace("claude-", "")
-            rows.append([
-                "claude", cl_mod, today_str,
-                cl_in, cl_out, cl_cw, cl_req,
-                f"{cl_cost:.6f}",
-            ])
+    # ── resumen diario CSV (por proveedor+modelo) ─────────────────────────────
 
-        # ── Codex ──────────────────────────────────────────────────────────────
-        cx_req  = snap.get("cx_today_req",  0)
-        if cx_req > 0:
-            cx_in     = snap.get("cx_today_in",     0)
-            cx_out    = snap.get("cx_today_out",    0)
-            cx_cached = snap.get("cx_today_cached", 0)
-            cx_cost   = snap.get("cx_today_cost",   0.0)
-            cx_mod    = snap.get("cx_last_model",   "unknown")
-            rows.append([
-                "codex", cx_mod, today_str,
-                cx_in, cx_out, cx_cached, cx_req,
-                f"{cx_cost:.6f}",
-            ])
+    def _write_summary(self, today: str) -> None:
+        model_totals: dict[tuple, dict] = defaultdict(
+            lambda: {"in": 0, "out": 0, "req": 0, "cost": 0.0}
+        )
 
-        # ── Gemini ─────────────────────────────────────────────────────────────
-        gm_req  = snap.get("gm_today_req",  0)
-        if gm_req > 0:
-            gm_in     = snap.get("gm_today_in",     0)
-            gm_out    = snap.get("gm_today_out",    0)
-            gm_cached = snap.get("gm_today_cached", 0)
-            gm_cost   = snap.get("gm_today_cost",   0.0)
-            gm_mod    = snap.get("gm_last_model",   "unknown")
-            rows.append([
-                "gemini", gm_mod, today_str,
-                gm_in, gm_out, gm_cached, gm_req,
-                f"{gm_cost:.6f}",
-            ])
+        for entry in self._seen:
+            m = _RE_TOK.search(entry)
+            if m:
+                tag, model = m.group(1), m.group(2)
+                in_tok     = int(m.group(3).replace(",", ""))
+                out_tok    = int(m.group(4).replace(",", ""))
+                provider   = _TAG_PROVIDER.get(tag, tag)
+                key        = (provider, model)
+                model_totals[key]["in"]   += in_tok
+                model_totals[key]["out"]  += out_tok
+                model_totals[key]["req"]  += 1
+                model_totals[key]["cost"] += _cost_for(provider, model, in_tok, out_tok)
+                continue
 
-        # ── Copilot ────────────────────────────────────────────────────────────
-        cp_req  = snap.get("cp_today_req",  0)
-        if cp_req > 0:
-            cp_in     = snap.get("cp_today_in",     0)
-            cp_out    = snap.get("cp_today_out",    0)
-            cp_cached = snap.get("cp_today_cached", 0)
-            cp_cost   = snap.get("cp_today_cost",   0.0)
-            cp_mod    = snap.get("cp_last_model",   "unknown")
-            rows.append([
-                "copilot", cp_mod, today_str,
-                cp_in, cp_out, cp_cached, cp_req,
-                f"{cp_cost:.6f}",
-            ])
+            m2 = _RE_REQ.search(entry)
+            if m2:
+                tag, model = m2.group(1), m2.group(2)
+                provider   = _TAG_PROVIDER.get(tag, tag)
+                key        = (provider, model)
+                model_totals[key]["req"] += 1
 
-        if not rows:
+        if not model_totals:
             return
 
+        log_file = LOGS_DIR / f"{today}.csv"
         with open(log_file, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "provider", "model", "date",
-                "tokens_in", "tokens_out", "tokens_cached",
-                "requests", "cost_usd",
+                "tokens_in", "tokens_out", "requests", "cost_usd",
             ])
-            writer.writerows(rows)
+            for (provider, model), d in sorted(model_totals.items()):
+                writer.writerow([
+                    provider, model, today,
+                    d["in"], d["out"], d["req"],
+                    f"{d['cost']:.6f}",
+                ])

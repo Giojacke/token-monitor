@@ -13,17 +13,36 @@
 
 ---
 
-## ¿Qué es esto?
+## ¿Por qué Token Monitor?
 
-Una pantalla flotante de escritorio que lee en tiempo real los logs de **Claude Code**, **Codex CLI**, **Gemini CLI** y **GitHub Copilot** y muestra:
+Los dashboards de Anthropic, OpenAI y Google te dicen cuánto gastaste **ayer**.  
+Este monitor te lo dice **ahora**, mientras escribís.
 
-- Tokens consumidos por sesión (ventana de 5h) y acumulados por día, semana, mes y año
-- Modelo detectado automáticamente (`claude-sonnet-4-6`, `gpt-5.4`, `gemini-2.5-pro`, etc.)
-- Costo estimado en dólares usando precios reales de API por modelo
-- Barra de uso calibrable contra `claude.ai/settings` con factor de corrección
-- System tray de Windows con tooltip de uso en tiempo real — arranca minimizado por defecto
-- Scroll vertical para agregar más proveedores sin romper el layout
-- **Logs diarios en CSV** guardados automáticamente en `~/.token-monitor/logs/`
+✓ **Claude + Codex + Gemini + Copilot en un solo lugar** — sin cambiar de pestaña  
+✓ **Costos en tiempo real** — dólares acumulados por sesión, día, semana y mes  
+✓ **Históricos locales** — CSV diario en `~/.token-monitor/logs/`, sin dependencias externas  
+✓ **Compará modelos** — sabé si el Sonnet justifica el precio sobre Haiku en tu flujo real  
+✓ **Cero APIs** — lee solo logs locales; no envía datos a ningún servidor
+
+> Si Anthropic, OpenAI o GitHub agregan dashboards parecidos, verás tokens.  
+> Este monitor ya tiene comparativas, tendencias e históricos — eso no lo replican fácil.
+
+---
+
+## Lo que ves en 3 segundos
+
+![Token Monitor en acción](assets/screenshot.png)
+
+---
+
+## ¿Qué incluye?
+
+- **Barras de uso calibrables** — sesión y semanal contra `claude.ai/settings` con factor de corrección
+- **Modelo detectado automáticamente** — `claude-sonnet-4-6`, `gpt-5.4`, `gemini-2.5-pro`, `gpt-4o` sin configurar nada
+- **GitHub Copilot Free**: dos cuotas separadas — `24/50 chat` y `0/2000 inline completions`
+- **System tray de Windows** — tooltip de uso en tiempo real, arranca minimizado por defecto
+- **Logs diarios en CSV** — `~/.token-monitor/logs/YYYY-MM-DD.txt`, actualizados cada 60s
+- **Scroll vertical** — agregá más proveedores sin romper el layout
 - **Interfaz en español e inglés** — cambiable en ⚙ sin reiniciar
 
 ---
@@ -87,27 +106,70 @@ El JSONL de Gemini usa un patrón de append-update donde la misma entrada puede 
 
 ### GitHub Copilot
 
-GitHub Copilot (extensión de VS Code) escribe logs en:
+La extensión de VS Code escribe logs en:
 
-- **Windows:** `%APPDATA%\GitHub Copilot\` y `%APPDATA%\Code\User\globalStorage\github.copilot-chat\`
-- **Mac:** `~/Library/Application Support/GitHub Copilot/`
-- **Linux:** `~/.config/github-copilot/`
+- **Windows:** `%APPDATA%\Code\logs\<session>\window1\exthost\GitHub.copilot-chat\`
+- **Mac:** `~/Library/Application Support/Code/logs/.../GitHub.copilot-chat/`
+- **Linux:** `~/.config/Code/logs/.../GitHub.copilot-chat/`
 
-El monitor lee archivos `.json` y `.jsonl` de esos directorios buscando los campos `model`, `token_usage` (OpenAI) o `tokens` (Anthropic/otros). Los costos mostrados son el **equivalente en API** — el costo real para el usuario es la suscripción mensual de Copilot.
+El monitor parsea **dos formatos distintos** del mismo archivo `.log`:
+
+- `[fetchCompletions] ... finished with 200` → inline completions (cuota: 2000/mes en Free)
+- `ccreq:ID | success | model | Xms | [source]` → chat, Copilot Edits, agente (cuota: 50/mes en Free)
+
+Los costos mostrados son el **equivalente en API** — el costo real para el usuario es la suscripción mensual de Copilot.
+
+#### Por qué tok = 0 en Copilot
+
+A diferencia de Claude Code, Codex y Gemini — que escriben los conteos de tokens en sus logs locales — **la extensión de VS Code de GitHub Copilot no registra tokens de input/output en ningún archivo local**. Los dos formatos de log solo indican que ocurrió una request y si tuvo éxito; no hay campo `usage`, `token_count` ni equivalente.
+
+Se investigaron todas las alternativas conocidas:
+
+| Alternativa | Resultado |
+|---|---|
+| Logs de VS Code (`exthost/GitHub.copilot-chat/`) | Solo registra eventos de request, sin conteo de tokens |
+| `%APPDATA%\GitHub Copilot\` y `globalStorage\` | Configuración y caché de sesión, sin métricas de uso |
+| API REST de GitHub (`/orgs/{org}/copilot/usage`) | Requiere rol de administrador de organización + PAT; no existe endpoint para usuarios individuales |
+| Copilot CLI | Producto distinto a la extensión de VS Code; sus datos no reflejan el uso desde el editor |
+| Dashboard web de GitHub | Visible solo para admins de org desde junio 2026; no accesible para cuentas Free/Pro individuales |
+
+**Lo que sí se captura:** el conteo de requests por tipo (`chat_req` y `comp_req`) y el modelo usado — suficiente para saber cuánto te queda de la cuota mensual (`25/50 chat`, `0/2000 inline`). Los tokens estimados quedan en 0 porque no hay fuente de datos local que los exponga.
 
 ---
 
 ## Logs diarios
 
-El monitor guarda un resumen diario en `~/.token-monitor/logs/YYYY-MM-DD.txt` con formato CSV:
+El monitor genera automáticamente dos archivos por día en `~/.token-monitor/logs/`:
+
+### `YYYY-MM-DD.csv` — resumen por modelo
+
+Una fila por cada combinación proveedor+modelo detectada en el día. Se sobreescribe cada 60 segundos con los totales actualizados.
 
 ```
-provider,model,date,tokens_in,tokens_out,tokens_cached,requests,cost_usd
-claude,sonnet-4-6,2026-06-02,284231,3667,272564,15,0.055005
-gemini,gemini-3-flash-preview,2026-06-02,55944,502,22626,9,0.000433
+provider,model,date,tokens_in,tokens_out,requests,cost_usd
+claude,sonnet-4-6,2026-06-02,284231,3667,15,0.055005
+codex,gpt-5.4,2026-06-02,140956,1073,9,0.018214
+copilot,gpt-4o,2026-06-02,0,0,25,0.000000
+gemini,gemini-3-flash-preview,2026-06-02,549000,502,9,0.000433
 ```
 
-El archivo se actualiza cada 60 segundos (sobreescribe el del día actual). Ideal para auditoría o importar a hojas de cálculo.
+Si usás dos modelos distintos del mismo proveedor en el mismo día (ej. `sonnet-4-6` por la mañana y `haiku-4-5` por la tarde) aparecen como filas separadas. El costo de Copilot queda en `0.000000` porque sus logs locales no exponen conteo de tokens (ver sección anterior).
+
+### `YYYY-MM-DD-activity.txt` — auditoría en tiempo real
+
+Cada request capturado, en el mismo formato que muestra el Activity Log de la UI. Se actualiza cada 10 segundos en **modo append** — nunca se sobreescribe, crece durante el día y queda como registro permanente.
+
+```
+[21:25:49] [cx]  gpt-5.4  in=73,244  out=195
+[21:26:28] [cl]  sonnet-4-6  in=136,553  out=130
+[21:26:40] [gm]  gemini-3-flash-preview  in=30,106  out=502
+[21:26:58] [ch]  gpt-4o  req+1
+[21:26:59] [cp]  gpt-4o  req+1
+```
+
+Tags de proveedor: `[cl]` Claude · `[cx]` Codex · `[gm]` Gemini · `[ch]` Copilot chat · `[cp]` Copilot inline completion
+
+Ambos archivos son texto plano — importables en Excel, grep-ables desde terminal, o procesables con cualquier script.
 
 ---
 
@@ -122,9 +184,8 @@ token_monitor/
 ├── state.py           Estado compartido thread-safe entre scanners y UI
 ├── scanner.py         Scanner de JSONL de Claude Code
 ├── codex_scanner.py   Scanner de JSONL de Codex CLI
-├── codex_status.py    Poller de `codex /status` para rate-limits en vivo
 ├── gemini_scanner.py  Scanner de JSONL de Gemini CLI
-├── copilot_scanner.py Scanner de JSON/JSONL de GitHub Copilot
+├── copilot_scanner.py Scanner de logs de GitHub Copilot (VS Code extension)
 ├── wrapper.py         Generación de scripts wrapper para Codex en tiempo real
 ├── ui.py              Interfaz Tkinter flotante con scroll
 ├── tray.py            Integración system tray
@@ -219,10 +280,11 @@ Para agregar un idioma nuevo, añade una clave en el dict `TEXTOS` de `token_mon
 ## Roadmap
 
 - [x] Gemini CLI
-- [x] GitHub Copilot
+- [x] GitHub Copilot (VS Code extension — chat + inline completions separados)
+- [x] Logs diarios en CSV
+- [x] Internacionalización (ES / EN)
 - [ ] Cursor
 - [ ] Notificaciones de alerta al cruzar umbrales configurables
-- [ ] Exportar historial a CSV *(logs diarios ya disponibles en `~/.token-monitor/logs/`)*
 - [ ] Tests automatizados de parsers
 
 ---
@@ -231,13 +293,13 @@ Para agregar un idioma nuevo, añade una clave en el dict `TEXTOS` de `token_mon
 
 1. Fork del repo
 2. `git checkout -b feature/nueva-ia`
-3. Para agregar un proveedor nuevo, implementa un scanner siguiendo el patrón de `scanner.py`, `codex_scanner.py`, `gemini_scanner.py` o `copilot_scanner.py`
+3. Para agregar un proveedor nuevo, implementá un scanner siguiendo el patrón de `scanner.py`, `codex_scanner.py`, `gemini_scanner.py` o `copilot_scanner.py`
 4. Los precios del modelo nuevo van en `config.py` como dict `{modelo: {in, cached, out}}`
-5. Agrega las claves de traducción necesarias en `i18n.py` (español e inglés)
+5. Agregá las claves de traducción necesarias en `i18n.py` (español e inglés)
 6. PR con descripción de qué IA agregaste y cómo detectaste el modelo en sus logs locales
 
 ---
 
 ## Licencia
 
-MIT — hecho con ❤️ para la comunidad dev hispana
+MIT — hecho con para la comunidad dev hispana

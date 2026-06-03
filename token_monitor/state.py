@@ -18,7 +18,7 @@ def _zero_gm() -> dict:
 
 
 def _zero_cp() -> dict:
-    return {p: {"in": 0, "out": 0, "cached": 0, "req": 0, "cost": 0.0} for p in PERIODS}
+    return {p: {"in": 0, "out": 0, "cached": 0, "req": 0, "chat_req": 0, "comp_req": 0, "cost": 0.0} for p in PERIODS}
 
 
 class TokenState:
@@ -132,12 +132,14 @@ class TokenState:
                 out[f"gm_{p}_req"]    = gm["req"]
                 out[f"gm_{p}_cost"]   = gm_cost
 
-                out[f"cp_{p}_tok"]    = cp_tok
-                out[f"cp_{p}_in"]     = cp["in"]
-                out[f"cp_{p}_out"]    = cp["out"]
-                out[f"cp_{p}_cached"] = cp["cached"]
-                out[f"cp_{p}_req"]    = cp["req"]
-                out[f"cp_{p}_cost"]   = cp_cost
+                out[f"cp_{p}_tok"]      = cp_tok
+                out[f"cp_{p}_in"]       = cp["in"]
+                out[f"cp_{p}_out"]      = cp["out"]
+                out[f"cp_{p}_cached"]   = cp["cached"]
+                out[f"cp_{p}_req"]      = cp["req"]
+                out[f"cp_{p}_chat_req"] = cp.get("chat_req", 0)
+                out[f"cp_{p}_comp_req"] = cp.get("comp_req", 0)
+                out[f"cp_{p}_cost"]     = cp_cost
 
                 out[f"total_{p}_cost"] = cl_cost + cx_cost + gm_cost + cp_cost
                 out[f"total_{p}_req"]  = cl["req"] + cx["req"] + gm["req"] + cp["req"]
@@ -157,6 +159,18 @@ class TokenState:
             out["gm_last_model"]  = self.gm_last_model
             out["cp_last_model"]  = self.cp_last_model
             return out
+
+    def full_activity(self) -> list[str]:
+        """Retorna todas las entradas del activity log del día, sin límite de 40."""
+        with self.lock:
+            raw = sorted(self.cl_log + self.cx_log + self.gm_log + self.cp_log)
+            seen: set[str] = set()
+            result: list[str] = []
+            for entry in raw:
+                if entry not in seen:
+                    seen.add(entry)
+                    result.append(entry)
+            return result
 
     def reset(self) -> None:
         with self.lock:

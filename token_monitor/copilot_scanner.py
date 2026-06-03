@@ -30,8 +30,8 @@ _LOG_EXTS = {".jsonl", ".json", ".log"}
 # Regex para extraer JSON de líneas "[timestamp] {json}" (formato antiguo de logs)
 _RE_JSON_IN_LOG = re.compile(r"^\[.*?\]\s+(\{.*)")
 
-# VS Code plain-text log: "2026-05-30 22:36:30.347 [info] [fetchCompletions] Request ... finished with 200"
-# Captura: (1) timestamp, (2) model from URL (puede ser ""), (3) endpoint, (4) status code
+# VS Code plain-text log formato 1: [fetchCompletions] (inline code completions)
+# "2026-05-30 22:36:30.347 [info] [fetchCompletions] Request ... finished with 200"
 _RE_VSCODE_FETCH = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)"
     r" \[\w+\] \[fetch\w*\] Request \S+ at "
@@ -39,33 +39,60 @@ _RE_VSCODE_FETCH = re.compile(
     r" finished with (\d+)"
 )
 
+# VS Code plain-text log formato 2: ccreq (chat, edits, agent)
+# "2026-06-02 13:56:59.204 [info] ccreq:1e38187e.copilotmd | success | gpt-4o-mini | 986ms | [panel/editAgent]"
+_RE_VSCODE_CCREQ = re.compile(
+    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)"
+    r" \[\w+\] ccreq:[a-f0-9]+\.\w+ \| success \| ([^|]+) \| \d+ms \| \[([^\]]+)\]"
+)
+
 
 def _is_vscode_plain_log(first_line: str) -> bool:
     return bool(re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", first_line.lstrip()))
 
 
+def _clean_model(raw: str) -> str:
+    """Normaliza nombre de modelo: quita sufijo -copilot, toma parte post-arrow si existe."""
+    raw = raw.strip()
+    if " -> " in raw:
+        raw = raw.split(" -> ", 1)[1].strip()
+    return raw.replace("-copilot", "").replace("copilot-", "") or "gpt-4o"
+
+
 def _parse_vscode_plain_log_entries(raw: str) -> list[tuple]:
     """
-    Parsea logs planos de VS Code buscando requests Copilot con status 200.
-    Retorna lista de (ts_utc, inp=0, out=0, cached=0, model).
-    Sin tokens disponibles; solo cuenta requests.
+    Parsea logs planos de VS Code buscando requests Copilot exitosos.
+    Captura dos formatos:
+      - [fetchCompletions] finished with 200  → inline completions ("comp")
+      - ccreq:ID | success | model | Xms | [source]  → chat/edits/agent ("chat")
+    Retorna lista de (ts_utc, inp=0, out=0, cached=0, model, req_type).
     """
     entries: list[tuple] = []
     for line in raw.splitlines():
-        m = _RE_VSCODE_FETCH.match(line.strip())
-        if not m:
+        stripped = line.strip()
+
+        m = _RE_VSCODE_FETCH.match(stripped)
+        if m:
+            ts_str, model_url, endpoint, status = m.group(1), m.group(2) or "", m.group(3) or "", m.group(4)
+            if status == "200":
+                try:
+                    ts = datetime.fromisoformat(ts_str.replace(" ", "T")).astimezone(timezone.utc)
+                except Exception:
+                    ts = datetime.now(timezone.utc)
+                model = _clean_model(model_url or endpoint)
+                entries.append((ts, 0, 0, 0, model, "comp"))
             continue
-        ts_str, model_url, endpoint, status = m.group(1), m.group(2) or "", m.group(3) or "", m.group(4)
-        if status != "200":
-            continue
-        try:
-            ts_naive = datetime.fromisoformat(ts_str.replace(" ", "T"))
-            ts = ts_naive.astimezone(timezone.utc)
-        except Exception:
-            ts = datetime.now(timezone.utc)
-        # Limpia nombre de modelo: "gpt-41-copilot" → "gpt-41"
-        model = (model_url or endpoint).replace("-copilot", "").replace("copilot-", "") or "gpt-4o"
-        entries.append((ts, 0, 0, 0, model))
+
+        m = _RE_VSCODE_CCREQ.match(stripped)
+        if m:
+            ts_str, model_raw = m.group(1), m.group(2)
+            try:
+                ts = datetime.fromisoformat(ts_str.replace(" ", "T")).astimezone(timezone.utc)
+            except Exception:
+                ts = datetime.now(timezone.utc)
+            model = _clean_model(model_raw)
+            entries.append((ts, 0, 0, 0, model, "chat"))
+
     return entries
 
 
@@ -314,11 +341,13 @@ class CopilotScanner:
         current = max(all_files, key=lambda f: f.stat().st_mtime)
 
         totals: dict[str, dict] = {
-            p: {"in": 0, "out": 0, "cached": 0, "req": 0, "cost": 0.0}
+            p: {"in": 0, "out": 0, "cached": 0, "req": 0, "chat_req": 0, "comp_req": 0, "cost": 0.0}
             for p in PERIODS
         }
         log: list[str] = []
         last_model: str = ""
+
+        _all_keys = ("in", "out", "cached", "req", "chat_req", "comp_req", "cost")
 
         for f in all_files:
             try:
@@ -336,20 +365,20 @@ class CopilotScanner:
                     "mtime": stat.st_mtime, "size": stat.st_size, "data": fd}
 
             if f == current:
-                for k in ("in", "out", "cached", "req", "cost"):
-                    totals["sess"][k] += fd["sess"][k]
+                for k in _all_keys:
+                    totals["sess"][k] += fd["sess"].get(k, 0)
                 log        = fd["log"]
                 last_model = fd.get("last_model", "")
 
             for p in ("5h", "today", "week", "month", "year"):
-                for k in ("in", "out", "cached", "req", "cost"):
-                    totals[p][k] += fd[p][k]
+                for k in _all_keys:
+                    totals[p][k] += fd[p].get(k, 0)
 
-        self.state.update_copilot(totals, log[-40:], last_model)
+        self.state.update_copilot(totals, log, last_model)
 
     def _read_file(self, path: Path, starts: dict[str, datetime]) -> dict:
         fd: dict = {
-            p: {"in": 0, "out": 0, "cached": 0, "req": 0, "cost": 0.0}
+            p: {"in": 0, "out": 0, "cached": 0, "req": 0, "chat_req": 0, "comp_req": 0, "cost": 0.0}
             for p in PERIODS
         }
         fd["log"]        = []
@@ -365,7 +394,9 @@ class CopilotScanner:
         if _is_vscode_plain_log(first_line):
             parsed_entries = _parse_vscode_plain_log_entries(raw_text)
             if self._first_scan:
-                print(f"[copilot]   {path.name}: {len(parsed_entries)} requests 200 (log VS Code — sin tokens)")
+                chats = sum(1 for e in parsed_entries if len(e) > 5 and e[5] == "chat")
+                comps = sum(1 for e in parsed_entries if len(e) > 5 and e[5] == "comp")
+                print(f"[copilot]   {path.name}: {comps} inline + {chats} chat (log VS Code — sin tokens)")
         else:
             json_objs = _extract_entries_from_text(raw_text, path.suffix.lower())
             try:
@@ -380,34 +411,41 @@ class CopilotScanner:
             if self._first_scan and json_objs:
                 print(f"[copilot]   {path.name}: {len(parsed_entries)}/{len(json_objs)} entradas con tokens")
 
-        for ts, inp, out, cached, model in parsed_entries:
+        for entry in parsed_entries:
+            ts, inp, out, cached, model = entry[0], entry[1], entry[2], entry[3], entry[4]
+            req_type = entry[5] if len(entry) > 5 else "comp"
             cost = calc_copilot_cost(inp, out, cached, model)
 
-            fd["sess"]["in"]     += inp
-            fd["sess"]["out"]    += out
-            fd["sess"]["cached"] += cached
-            fd["sess"]["req"]    += 1
-            fd["sess"]["cost"]   += cost
-            fd["last_model"]      = model
+            fd["sess"]["in"]       += inp
+            fd["sess"]["out"]      += out
+            fd["sess"]["cached"]   += cached
+            fd["sess"]["req"]      += 1
+            fd["sess"]["chat_req"] += 1 if req_type == "chat" else 0
+            fd["sess"]["comp_req"] += 1 if req_type == "comp" else 0
+            fd["sess"]["cost"]     += cost
+            fd["last_model"]        = model
 
             if ts >= starts["today"]:
+                tag = "ch" if req_type == "chat" else "cp"
                 if inp or out:
                     fd["log"].append(
-                        f"[{ts.astimezone().strftime('%H:%M:%S')}] [cp]"
+                        f"[{ts.astimezone().strftime('%H:%M:%S')}] [{tag}]"
                         f"  {model}  in={inp + cached:,}  out={out:,}"
                     )
                 else:
                     fd["log"].append(
-                        f"[{ts.astimezone().strftime('%H:%M:%S')}] [cp]"
+                        f"[{ts.astimezone().strftime('%H:%M:%S')}] [{tag}]"
                         f"  {model}  req+1"
                     )
 
             for period, start_utc in starts.items():
                 if ts >= start_utc:
-                    fd[period]["in"]     += inp
-                    fd[period]["out"]    += out
-                    fd[period]["cached"] += cached
-                    fd[period]["req"]    += 1
-                    fd[period]["cost"]   += cost
+                    fd[period]["in"]       += inp
+                    fd[period]["out"]      += out
+                    fd[period]["cached"]   += cached
+                    fd[period]["req"]      += 1
+                    fd[period]["chat_req"] += 1 if req_type == "chat" else 0
+                    fd[period]["comp_req"] += 1 if req_type == "comp" else 0
+                    fd[period]["cost"]     += cost
 
         return fd

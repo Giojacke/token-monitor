@@ -743,32 +743,35 @@ class TokenMonitorApp:
                         getattr(self, f"lbl_gm_{period}_tok").config(text=fmt_tok(tok))
                         getattr(self, f"lbl_gm_{period}_cost").config(text=fmt_cost(cost))
 
-            # ── Copilot: título + barra según plan ───────────────────────────
-            if self._show_cp and hasattr(self, "lbl_cp_title"):
-                cp_plan  = self.runtime_cfg.get("copilot_plan", "unknown")
-                cp_model = snap.get("cp_last_model", "")
-                cp_short = cp_model if cp_model else t("unknown")
-                plan_info = COPILOT_PLANES.get(cp_plan, {})
-                plan_label = plan_info.get("label", t("github_enterprise"))
-                self.lbl_cp_title.config(
-                    text=f"◆ COPILOT  — {cp_short}  [{plan_label}]")
-
+            # ── Copilot: barra según plan + contadores numéricos ─────────────
             if self._show_cp and hasattr(self, "cv_cp"):
                 cp_plan      = self.runtime_cfg.get("copilot_plan", "unknown")
-                month_cost   = snap.get("cp_month_cost", 0)
-                month_req    = snap.get("cp_month_req",  0)
+                month_req    = snap.get("cp_month_req",      0)
+                month_chat   = snap.get("cp_month_chat_req", 0)
+                month_comp   = snap.get("cp_month_comp_req", 0)
 
                 if cp_plan == "free":
-                    # barra: completions este mes / 2000 (límite mensual del plan free)
-                    free_limit = COPILOT_PLANES["free"].get("completions_mes", 2000)
-                    pct = min(month_req / free_limit, 1.0) if free_limit > 0 else 0
+                    chat_limit = COPILOT_PLANES["free"].get("chat_requests_mes", 50)
+                    comp_limit = COPILOT_PLANES["free"].get("completions_mes", 2000)
+                    # barra usa el chat (límite más restrictivo para uso típico)
+                    pct = min(month_chat / chat_limit, 1.0) if chat_limit > 0 else 0
+                    bar_info = f"{month_chat}/{chat_limit} chat  ·  {month_comp}/{comp_limit} inline"
                 else:
-                    # pro / pro+ / business / enterprise: req vs referencia configurable
-                    req_ref = self.runtime_cfg.get("copilot_req_ref", 500)
-                    pct = min(month_req / req_ref, 1.0) if req_ref > 0 else 0
+                    req_ref  = self.runtime_cfg.get("copilot_req_ref", 500)
+                    pct      = min(month_req / req_ref, 1.0) if req_ref > 0 else 0
+                    bar_info = f"{month_req}/{req_ref} req"
 
                 w = self.cv_cp.winfo_width() or (WINDOW_W - 24)
                 make_bar(self.cv_cp, w, 8, pct, COPILOT_C)
+
+                # Mostrar contadores en el título
+                if hasattr(self, "lbl_cp_title"):
+                    cp_model   = snap.get("cp_last_model", "")
+                    cp_short   = cp_model if cp_model else t("unknown")
+                    plan_info  = COPILOT_PLANES.get(cp_plan, {})
+                    plan_label = plan_info.get("label", t("github_enterprise"))
+                    self.lbl_cp_title.config(
+                        text=f"◆ COPILOT  [{plan_label}]  {bar_info}")
 
                 for _, period in COL_PERIODS:
                     tok  = snap.get(f"cp_{period}_tok", 0)

@@ -93,7 +93,7 @@ class TokenScanner:
                 for k in ("in", "out", "cw", "cr", "req", "cost"):
                     totals[p][k] += fd[p][k]
 
-        self.state.update(totals, log[-40:], last_model)
+        self.state.update(totals, log, last_model)
 
     def _read_file(self, path: Path, starts: dict[str, datetime]) -> dict:
         fd: dict = {
