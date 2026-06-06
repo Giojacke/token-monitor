@@ -307,4 +307,4 @@ Para agregar un idioma nuevo, añade una clave en el dict `TEXTOS` de `token_mon
 
 ## Licencia
 
-MIT — hecho con para la comunidad dev hispana
+MIT — hecho con para la comunidad dev
