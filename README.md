@@ -52,10 +52,20 @@ Este monitor te lo dice **ahora**, mientras escribís.
 
 ---
 
-## Instalación
+## Descarga directa
+
+👉 **[token-monitor-windows.exe](https://github.com/Giojacke/token-monitor/releases/latest)**
+
+No necesitas Python — solo descarga y ejecuta.
+
+> El `.exe` se compila automáticamente con GitHub Actions cada vez que se publica una nueva versión (`git tag v1.x.x`).
+
+---
+
+## Instalación desde código
 
 ```bash
-git clone https://github.com/CodHector/token-monitor
+git clone https://github.com/Giojacke/token-monitor
 cd token-monitor
 pip install -r requirements.txt
 python -m token_monitor
