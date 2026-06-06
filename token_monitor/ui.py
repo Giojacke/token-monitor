@@ -11,6 +11,7 @@ from .config import (
 )
 from .state import TokenState
 from .settings_ui import SettingsWindow
+from .chart_ui import ChartWindow
 from .i18n import t
 
 
@@ -100,6 +101,7 @@ class TokenMonitorApp:
         self._dragging     = False
         self._drag_x = self._drag_y = 0
         self._settings_win  = None
+        self._chart_win     = None
         self.tray_manager   = None
         self._translatable: list = []   # (widget, i18n_key) para _apply_language()
 
@@ -262,6 +264,11 @@ class TokenMonitorApp:
                   font=self.f_mono_sm, activebackground="#111",
                   activeforeground=CLAUDE_C,
                   command=self._open_settings).pack(side="right")
+
+        tk.Button(hdr, text="📊", bg="#111", fg=DIM, bd=0, padx=6,
+                  font=self.f_mono_sm, activebackground="#111",
+                  activeforeground=CODEX_C,
+                  command=self._open_chart).pack(side="right")
 
         tk.Label(hdr, text="● LIVE", bg="#111", fg="#28c840",
                  font=self.f_mono_sm).pack(side="right", padx=4)
@@ -612,6 +619,21 @@ class TokenMonitorApp:
             self.runtime_cfg,
             state=self.state,
             on_save=self._apply_settings,
+        )
+
+    def _open_chart(self) -> None:
+        if self._chart_win and self._chart_win.is_alive():
+            self._chart_win.lift()
+            return
+        self._chart_win = ChartWindow(
+            self.root,
+            self.state,
+            get_visible=lambda: {
+                "cl": self._show_cl,
+                "cx": self._show_cx,
+                "gm": self._show_gm,
+                "cp": self._show_cp,
+            },
         )
 
     def _apply_language(self) -> None:

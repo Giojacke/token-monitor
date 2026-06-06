@@ -33,6 +33,10 @@ Este monitor te lo dice **ahora**, mientras escribís.
 
 ![Token Monitor en acción](assets/screenshot.png)
 
+### Gráficas de barras — botón `📊`
+
+![Token Usage Charts](assets/estadistica.png)
+
 ---
 
 ## ¿Qué incluye?
@@ -40,6 +44,7 @@ Este monitor te lo dice **ahora**, mientras escribís.
 - **Barras de uso calibrables** — sesión y semanal contra `claude.ai/settings` con factor de corrección
 - **Modelo detectado automáticamente** — `claude-sonnet-4-6`, `gpt-5.4`, `gemini-2.5-pro`, `gpt-4o` sin configurar nada
 - **GitHub Copilot Free**: dos cuotas separadas — `24/50 chat` y `0/2000 inline completions`
+- **Gráficas de barras en tiempo real** — botón `📊` en el header abre 4 mini-gráficas (hoy / semana / mes / año) coloreadas por proveedor, con leyenda y auto-refresco cada 2s
 - **System tray de Windows** — tooltip de uso en tiempo real, arranca minimizado por defecto
 - **Logs diarios en CSV** — `~/.token-monitor/logs/YYYY-MM-DD.txt`, actualizados cada 60s
 - **Scroll vertical** — agregá más proveedores sin romper el layout
