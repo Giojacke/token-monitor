@@ -270,6 +270,11 @@ class TokenMonitorApp:
                   activeforeground=CODEX_C,
                   command=self._open_chart).pack(side="right")
 
+        tk.Button(hdr, text="📁", bg="#111", fg=DIM, bd=0, padx=6,
+                  font=self.f_mono_sm, activebackground="#111",
+                  activeforeground=GEMINI_C,
+                  command=self._open_logs_dir).pack(side="right")
+
         tk.Label(hdr, text="● LIVE", bg="#111", fg="#28c840",
                  font=self.f_mono_sm).pack(side="right", padx=4)
 
@@ -635,6 +640,12 @@ class TokenMonitorApp:
                 "cp": self._show_cp,
             },
         )
+
+    def _open_logs_dir(self) -> None:
+        import subprocess
+        from .config import LOGS_DIR
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(["explorer", str(LOGS_DIR)])
 
     def _apply_language(self) -> None:
         """Actualiza todos los widgets registrados en _translatable al idioma activo."""
