@@ -13,6 +13,7 @@ Comportamiento:
       rojo   > 80%
 """
 
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -33,7 +34,8 @@ _ROBOT_PATH = Path(__file__).parent.parent / "image" / "robot_token_monitor.png"
 class TrayManager:
     """
     Gestiona el icono en la bandeja del sistema.
-    Corre en un hilo secundario (pystray.Icon.run() es bloqueante).
+    En macOS se integra con el mainloop principal; en otros sistemas corre
+    en un hilo secundario (pystray.Icon.run() es bloqueante).
     Toda comunicación con Tk va por root.after() — es thread-safe.
     """
 
@@ -66,7 +68,14 @@ class TrayManager:
             self._robot_icon = Image.open(str(_ROBOT_PATH))
         except Exception:
             self._robot_icon = None
-        threading.Thread(target=self._run, daemon=True).start()
+        if sys.platform == "darwin":
+            # AppKit falla si pystray crea el NSStatusItem desde un thread:
+            # "NSWindow should only be instantiated on the main thread".
+            # start() se llama desde __main__.py antes de root.mainloop(),
+            # por eso acá todavía estamos en el hilo principal.
+            self._run_detached()
+        else:
+            threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self) -> None:
         if self._icon:
@@ -83,9 +92,9 @@ class TrayManager:
             return
         self._icon.title = f"Token Monitor — {int(pct*100)}%"
 
-    # ── hilo pystray ──────────────────────────────────────────────────────────
+    # ── pystray ───────────────────────────────────────────────────────────────
 
-    def _run(self) -> None:
+    def _create_icon(self):
         def sess_text(item):
             snap   = self.state.snapshot()
             limit  = self.runtime_cfg.get("session_limit", 0)
@@ -113,13 +122,20 @@ class TrayManager:
             pystray.MenuItem("Cerrar",          self._quit),
         )
 
-        self._icon = pystray.Icon(
+        return pystray.Icon(
             name  = "token-monitor",
             icon  = self._robot_icon,   # pystray redimensiona automáticamente
             title = "Token Monitor",
             menu  = menu,
         )
+
+    def _run(self) -> None:
+        self._icon = self._create_icon()
         self._icon.run()
+
+    def _run_detached(self) -> None:
+        self._icon = self._create_icon()
+        self._icon.run_detached()
 
     # ── callbacks (hilo pystray → Tk via after) ───────────────────────────────
 
